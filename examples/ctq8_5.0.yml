@@ -1,0 +1,17 @@
+
+name: 'linear_example'
+batchSize: 64
+device: cuda
+epochs: 5
+factor: 0.1
+learningRate: 5.0e-08
+patience: 10
+momentum: 0.9
+features: Lep1_pt,Lep2_pt,Lep1_eta,Lep2_eta,Lep1_phi,Lep2_phi,nJet30,jet1_pt,jet2_pt
+signalSample: /scratch365/cmcgrad2/data/ttbar_ctq8
+signalStartingPoint: ctq8=7.0
+signalTrainingTerm: 
+signalTrainingPoint: ctq8=5.0
+backgroundSample: /scratch365/cmcgrad2/data/tt_LO_SMEFTrwgt
+backgroundStartingPoint: ctu1=5.4:cqd1=7.0:cqq13=4.1:ctu8=9.0:cqu1=5.5:cqq11=4.2:cqq83=9.0:ctd1=7.0:ctd8=12.4:ctg=0.7:ctq1=4.4:cqq81=7.0:cqu8=9.5:cqd8=12.0:ctq8=7.0
+backgroundTrainingPoint: ctu1=5.4:cqd1=7.0:cqq13=4.1:ctu8=9.0:cqu1=5.5:cqq11=4.2:cqq83=9.0:ctd1=7.0:ctd8=12.4:ctg=0.7:ctq1=4.4:cqq81=7.0:cqu8=9.5:cqd8=12.0:ctq8=7.0

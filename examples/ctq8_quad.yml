@@ -1,0 +1,17 @@
+
+name: 'quad_test'
+batchSize: 64
+device: cuda
+epochs: 5
+factor: 0.1
+learningRate: 5.0e-08
+patience: 10
+momentum: 0.9
+features: Lep1_pt,Lep2_pt,Lep1_eta,Lep2_eta,Lep1_phi,Lep2_phi,nJet30,jet1_pt,jet2_pt
+signalSample: /scratch365/cmcgrad2/data/ttbar_ctq8
+signalStartingPoint: ctq8=7.0
+signalTrainingTerm: ctq8
+signalTrainingPoint: 
+backgroundSample: /scratch365/cmcgrad2/data/ttbar_ctq8
+backgroundStartingPoint: ctq8=7.0
+backgroundTrainingPoint: ctq8=0.05
