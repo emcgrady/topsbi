@@ -1,0 +1,10 @@
+name: topsbi
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - conda-forge::python=3.11
+  - pytorch
+  - matplotlib
+  - tqdm
+  - pyyaml
