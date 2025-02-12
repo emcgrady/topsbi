@@ -1,3 +1,4 @@
+backgroundMean: 0.12177789636325849
 backgroundSample: /scratch365/cmcgrad2/data/NanoGen_TT01j2l_ctj8
 backgroundStartingPoint: ctq8=-0.91
 backgroundTrainingPoint: ctq8=-0.91
@@ -30,6 +31,7 @@ learningRate: 5.0e-05
 momentum: 0.9
 name: /scratch365/cmcgrad2/topsbi/test/sm_quad
 patience: 10
+signalMean: 0.052662518402947486
 signalSample: /scratch365/cmcgrad2/data/ttbar_ctq8
 signalStartingPoint: ctq8=7.0
 signalTrainingPoint: null
