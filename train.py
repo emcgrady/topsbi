@@ -26,52 +26,55 @@ def savePlots(net, test, testLoss, trainLoss, label):
     #plot and save loss curves
     ax.plot( range(len(testLoss)), trainLoss, label="Training dataset")
     ax.plot( range(len(testLoss)), testLoss , label="Testing dataset")
+    ax.set_title(label.split('/')[-1], fontsize=14)
     ax.legend()
     fig.savefig(f'{label}/loss.png')
     ax.set_yscale('log')
     fig.savefig(f'{label}/lossLog.png')
     plt.clf()
+    plt.close()
 
     backgroundMask = test[:][2] == 0
     signalMask     = test[:][2] == 1
 
     #plot the network output
     fig, ax = plt.subplots(1, 1, figsize=[12,7])
-    bins = torch.linspace(0,1,100)
+    bins = torch.linspace(0,1,200)
     ax.hist(net(test[:][0][backgroundMask]).ravel().detach().cpu().numpy(),
             weights=test[:][1][backgroundMask].detach().cpu().numpy(),
-            bins=100, alpha=0.5, label='SM', density=True)
+            bins=bins, alpha=0.5, label='Background', density=True)
     ax.hist(net(test[:][0][signalMask]).ravel().detach().cpu().numpy(),
             weights=test[:][1][signalMask].detach().cpu().numpy(),
-            bins=bins, alpha=0.5, label='BSM', density=True)
+            bins=bins, alpha=0.5, label='Signal', density=True)
     ax.set_xlabel('Network Output', fontsize=12)
+    ax.set_title(label.split('/')[-1], fontsize=14)
     ax.legend()
     fig.savefig(f'{label}/netOut.png')
     ax.set_yscale('log')
     fig.savefig(f'{label}/netOutLog.png')
     plt.clf()
+    plt.close()
 
     #get network performance metrics
-    roc, auc, a = netEval(net(test[:][0][backgroundMask]), net(test[:][0][signalMask]),
+    fpr, tpr, auc, a = netEval(net(test[:][0][backgroundMask]), net(test[:][0][signalMask]),
                          test[:][1][backgroundMask], test[:][1][signalMask])
-    roc = roc.cpu()
 
     #make ROC curves
     fig, ax = plt.subplots(1, 1, figsize=[8,8])
-    ax.plot(roc[:,0], roc[:,1], label='Network Performance')
+    ax.plot(fpr, tpr, label='Network Performance')
     ax.plot([0,1],[0,1], ':', label='Baseline')
     ax.legend()
     ax.set_xlabel('False Positive Rate', fontsize=14)
     ax.set_ylabel('True Positive Rate', fontsize=14)
+    ax.set_title(label.split('/')[-1], fontsize=14)
     fig.savefig(f'{label}/roc.png')
     ax.set_xscale('log')
     ax.set_yscale('log')
     fig.savefig(f'{label}/rocLog.png')
     plt.clf()
+    plt.close()
     
     #save performance metrics
-    auc = auc.data.cpu().numpy()
-    a   = a.data.cpu().numpy()
     f = open(f'{label}/performance.txt','w+')
     f.write(f'Area under ROC: {auc}\nAccuracy:       {a}\n')
     f.close()
@@ -83,8 +86,7 @@ def main():
     #Load the configuration options and build the WC lists
     with open(parser.parse_args().config, 'r') as f:
         config = yaml.safe_load(f)
-    config['signalWCList'] = ['sm'] + config['signalStartingPoint'].replace(":", "_").replace("=", "_").split("_")[::2]
-    config['backgroundWCList'] = ['sm'] + config['backgroundStartingPoint'].replace(":", "_").replace("=", "_").split("_")[::2]
+    
 
     torch.manual_seed(42)
 
@@ -96,8 +98,15 @@ def main():
     #Load the model, loss funtion, and data
     model = Model(features=len(config['features'].split(",")),device=config['device'])
     data = DataLoader(config)
+    #Normalize weights with their respective means
+    config['signalMean'] = torch.mean(data[:][1][data[:][2] == 1]).detach().cpu().item()
+    config['backgroundMean'] = torch.mean(data[:][1][data[:][2] == 0]).detach().cpu().item()
+    data[:][1][data[:][2] == 1] /= config['signalMean']; data[:][1][data[:][2] == 0] /= config['backgroundMean']
+    with open(parser.parse_args().config,"w") as f:
+        f.write(yaml.dump(config))
+    
     train, test = torch.utils.data.random_split(data, [0.7, 0.3], generator=torch.Generator().manual_seed(42))
-    dataloader  = torch.utils.data.DataLoader(train, batch_size=64, shuffle=True)
+    dataloader  = torch.utils.data.DataLoader(train, batch_size=config['batchSize'], shuffle=True)
 
     optimizer = optim.SGD(model.net.parameters(), lr=config['learningRate'], momentum=config['momentum'])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=config['factor'], patience=config['patience'])
@@ -105,6 +114,8 @@ def main():
     testLoss  = [model.loss(test[:][0],  test[:][1],  test[:][2]).item()]
 
     for epoch in tqdm(range(config['epochs'])):
+        if epoch%50==0: 
+         savePlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/epoch_{epoch:04d}')
         for features, weights, targets in dataloader:
             optimizer.zero_grad()
             loss = model.loss(features, weights, targets)
@@ -113,8 +124,7 @@ def main():
         trainLoss.append(model.loss(train[:][0], train[:][1], train[:][2]).item())
         testLoss.append(model.loss(test[:][0], test[:][1], test[:][2]).item())
         scheduler.step(testLoss[epoch])
-        if epoch%50==0: 
-         savePlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/epoch_{epoch}')
+        
     savePlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/last')
 
 if __name__=="__main__":
