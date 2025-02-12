@@ -108,7 +108,8 @@ def main():
     train, test = torch.utils.data.random_split(data, [0.7, 0.3], generator=torch.Generator().manual_seed(42))
     dataloader  = torch.utils.data.DataLoader(train, batch_size=config['batchSize'], shuffle=True)
 
-    optimizer = optim.SGD(model.net.parameters(), lr=config['learningRate'], momentum=config['momentum'])
+    #optimizer = optim.SGD(model.net.parameters(), lr=config['learningRate'], momentum=config['momentum'])
+    optimizer = optim.Adam(model.net.parameters(), lr=config['learningRate'])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=config['factor'], patience=config['patience'])
     trainLoss = [model.loss(train[:][0], train[:][1], train[:][2]).item()]
     testLoss  = [model.loss(test[:][0],  test[:][1],  test[:][2]).item()]
