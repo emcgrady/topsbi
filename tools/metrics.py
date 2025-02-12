@@ -1,39 +1,16 @@
 import torch
 
-def netEval(backgroundOutput, signalOutput, background, signal, threshold=0.5, nPoints=200):
+def netEval(backgroundOutput, signalOutput, backgroundWeights, signalWeights, threshold=0.5, nPoints=200):
+    bins = torch.linspace(0, 1, nPoints + 1)
+    signalTotal =  signalWeights.sum()
+    backgroundTotal = backgroundWeights.sum()
+    tpr = []; fpr = []
+    for i in range(len(bins)):
+        tpr += [(signalWeights[(signalOutput >= bins[-(i+1)]).ravel()].sum()/signalTotal).item()]
+        fpr += [(backgroundWeights[(backgroundOutput >= bins[-(i+1)]).ravel()].sum()/backgroundTotal).item()]
 
-    backgroundHist, signalHist = makeHist(backgroundOutput, signalOutput, background, signal, nPoints)
-    roc, auc = makeROC(backgroundHist, signalHist, nPoints)
-    a = ( signal[(signalOutput <= threshold).flatten()].sum() + background[(backgroundOutput >= threshold).flatten()].sum() )/(signal.sum() + background.sum())
-    
-    return roc, auc, a
+    total = signalTotal + backgroundTotal
+    a = ((signalWeights[signalOutput.ravel() >= threshold].sum() + backgroundWeights[backgroundOutput.ravel() <= threshold].sum())/total).item()
+    auc = torch.trapz(torch.Tensor(tpr), x=torch.Tensor(fpr)).item()
 
-def makeHist(backgroundOutput, signalOutput, background, signal, nPoints):
-
-    backgroundIndices = torch.argsort(backgroundOutput, axis=0)
-    signalIndices     = torch.argsort(signalOutput, axis=0)
-
-    backgroundDisc = len(background)%nPoints
-    signalDisc     = len(signal)%nPoints
-
-    if backgroundDisc == 0:
-        background = torch.sum(torch.tensor_split(background[backgroundOutput], nPoints), axis=1)
-    else: 
-        background = torch.cat((torch.sum(torch.stack(torch.tensor_split(background, nPoints)[:backgroundDisc]), axis=1),
-                                torch.sum(torch.stack(torch.tensor_split(background, nPoints)[backgroundDisc:]), axis=1)), axis=0)    
-
-    if signalDisc == 0:
-        signal = torch.sum(torch.tensor_split(signal[signalOutput],   nPoints), axis=1)
-    else:
-        signal = torch.cat((torch.sum(torch.stack(torch.tensor_split(signal, nPoints)[:signalDisc]), axis=1),
-                            torch.sum(torch.stack(torch.tensor_split(signal, nPoints)[signalDisc:]), axis=1)), axis=0)
-    return signal, background
-
-def makeROC(backgroundHist, signalHist, nPoints):
-
-    roc = torch.cat((torch.cumsum(signalHist, dim=0).reshape(nPoints,1),
-                     torch.cumsum(backgroundHist, dim=0).reshape(nPoints,1)), axis=1)
-    roc = 1 - roc/roc[-1]
-    auc = -torch.trapz(roc[:,1], x=roc[:,0])
-    
-    return roc, auc
+    return fpr, tpr, auc, a
