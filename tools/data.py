@@ -6,10 +6,12 @@ import torch
 class DataLoader(data.Dataset):
     def __init__(self, config):
         self.config = config
+        self.signalWCList = ['sm'] + self.config['signalStartingPoint'].replace(":", "_").replace("=", "_").split("_")[::2]
+        self.backgroundWCList = ['sm'] + self.config['backgroundStartingPoint'].replace(":", "_").replace("=", "_").split("_")[::2]
         self.buildMapping()
         self.buildTensors()
         self.loadTensors()
-
+    
     def __len__( self ):
         return self.features.shape[0]
     
@@ -23,14 +25,14 @@ class DataLoader(data.Dataset):
         self.signalCoefMap = {}
         self.backgroundCoefMap = {}
         index = 0
-        for i in range(len(self.config['signalWCList'])):
+        for i in range(len(self.signalWCList)):
             for j in range(i+1):
-                self.signalCoefMap[(self.config['signalWCList'][i],self.config['signalWCList'][j])]=index
+                self.signalCoefMap[(self.signalWCList[i],self.signalWCList[j])]=index
                 index+=1
         index = 0
-        for i in range(len(self.config['backgroundWCList'])):
+        for i in range(len(self.backgroundWCList)):
             for j in range(i+1):
-                self.backgroundCoefMap[(self.config['backgroundWCList'][i],self.config['backgroundWCList'][j])]=index
+                self.backgroundCoefMap[(self.backgroundWCList[i],self.backgroundWCList[j])]=index
                 index+=1
 
     def buildTensors(self):
@@ -70,13 +72,22 @@ class DataLoader(data.Dataset):
     def loadTensors(self):
         backgroundWeight   = torch.load(f"{self.config['backgroundSample']}/{self.config['backgroundTrainingPoint'].replace('=','_').replace(':','_')}.p").to(device=self.config['device'])
         if self.config['signalTrainingTerm']:
-            signalWeight = torch.load(f"{self.config['signalSample']}/{self.config['signalTrainingTerm']}.p")
+            signalWeight = torch.load(f"{self.config['signalSample']}/{self.config['signalTrainingTerm']}.p").to(device=self.config['device'])
         else: 
             signalWeight = torch.load(f"{self.config['signalSample']}/{self.config['signalTrainingPoint'].replace('=','_').replace(':','_')}.p").to(device=self.config['device'])
+
+        cap = backgroundWeight.size()[0]
+        if signalWeight.size()[0] < 0:
+            cap = signalWeight.size()[0]
+
+        backgroundWeight = backgroundWeight[:cap]
+        signalWeight     = signalWeight[:cap]
             
-        backgroundFeatures = torch.load(f"{self.config['backgroundSample']}/features.p").to(device=self.config['device'])
-        signalFeatures     = torch.load(f"{self.config['signalSample']}/features.p").to(device=self.config['device'])
+        backgroundFeatures = torch.load(f"{self.config['backgroundSample']}/features.p").to(device=self.config['device'])[:cap,:]
+        signalFeatures     = torch.load(f"{self.config['signalSample']}/features.p").to(device=self.config['device'])[:cap,:]
         self.features      = torch.cat([signalFeatures, backgroundFeatures])
+        self.features     -= torch.Tensor(self.config['featureMeans'])
+        self.features     /= torch.Tensor(self.config['featureStdvs'])
         self.weights       = torch.cat([signalWeight, backgroundWeight])
-        self.targets       = torch.cat([torch.tensor([0], dtype=torch.float64, device=self.config['device']).repeat(backgroundFeatures.size(0)), 
-                                        torch.tensor([1], dtype=torch.float64, device=self.config['device']).repeat(signalFeatures.size(0))])
+        self.targets       = torch.cat([torch.tensor([1], dtype=torch.float64, device=self.config['device']).repeat(backgroundFeatures.size(0)), 
+                                        torch.tensor([0], dtype=torch.float64, device=self.config['device']).repeat(signalFeatures.size(0))])
