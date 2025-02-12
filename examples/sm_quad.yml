@@ -4,7 +4,7 @@ backgroundStartingPoint: ctq8=-0.91
 backgroundTrainingPoint: ctq8=-0.91
 batchSize: 1000
 device: cpu
-epochs: 100
+epochs: 300
 factor: 0.1
 featureMeans:
 - - 78.80930289871067
@@ -28,7 +28,6 @@ featureStdvs:
   - 47.56095921769085
 features: Lep1_pt,Lep2_pt,Lep1_eta,Lep2_eta,Lep1_phi,Lep2_phi,nJet30,jet1_pt,jet2_pt
 learningRate: 5.0e-05
-momentum: 0.9
 name: /scratch365/cmcgrad2/topsbi/test/sm_quad
 patience: 10
 signalMean: 0.052662518402947486
