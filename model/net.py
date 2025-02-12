@@ -1,18 +1,18 @@
 from torch import float64
 import torch.nn as nn
 
-cost =  nn.BCELoss(reduction='sum')
+cost =  nn.BCELoss(reduction='mean')
 
 class Net(nn.Module):
     def __init__(self, features, device):
         super().__init__()
         self.main_module = nn.Sequential( 
             nn.Linear(features, 32),
-            nn.ReLU(True),
+            nn.ReLU(),
             nn.Linear(32, 16),
-            nn.ReLU(True),
+            nn.ReLU(),
             nn.Linear(16, 8),
-            nn.ReLU(True),
+            nn.ReLU(),
             nn.Linear(8, 1),
             nn.Sigmoid(),
         )
