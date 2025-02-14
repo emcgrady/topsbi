@@ -9,7 +9,8 @@ class likelihood:
         self.model = Net(len(self.config['features'].split(',')), self.config['device'])
         self.model.load_state_dict(torch.load(f'{self.config["name"]}/last/networkStateDict.p',
                                               map_location=torch.device(self.config['device'])))
-        self.norm = self.config['backgroundMean']/self.config['signalMean']
+        #self.norm = self.config['backgroundMean']/self.config['signalMean']
+        self.norm =1
 
     def __call__(self, features):
         score = self.model(features.to(torch.float64))
@@ -20,7 +21,7 @@ class linearTerm:
         self.sm          = sm
         self.linear      = linear
         self.quad        = quad
-        self.linearValue = linear.config['signalTrainingPoint'].split('=')[1]
+        self.linearValue = float(linear.config['signalTrainingPoint'].split('=')[1])
 
     def __call__(self, features):
         return (self.linear(features) - self.sm(features) - self.quad(features)*self.linearValue**2)/self.linearValue
@@ -31,7 +32,7 @@ class interferenceTerm:
         terms   = interference.config['signalTrainingPoint'].split(':')
         for term in terms: 
             wc, value = term.split['=']
-            self.linearValue += [value]
+            self.linearValue += [float(value)]
             self.quad        += [quad[wc]]
             self.linear      += [linear[wc]]
         self.interference = interference
@@ -56,16 +57,22 @@ class fullLikelihood:
                 else:
                     self.interference[(wc0,wc1)] = interferenceTerm(self.linear, self.quad, likelihood(self.config[f'{wc_0}_{wc_1}']))
     def __call__(self, features, wcValues):
-        if set(self.wcs) != set(wcValues.keys()):
+        if set(self.wcs[1:]) != set(wcValues.keys()):
             raise RuntimeError(f'Coefficient mismatch!\ncoeffs passed: {wcValues}\nconfig coeffs: {self.wcs}')
             
         likelihoodRatio = 0
         for wc in self.wcs:
-            likelihoodRatio += (self.quad[wc](features)*wcValues[wc]**2).flatten()
+            if wc == 'sm':
+                likelihoodRatio += (self.quad[wc](features)).flatten()
+                print(likelihoodRatio)
+            else:
+                likelihoodRatio += (self.quad[wc](features)*wcValues[wc]**2).flatten()
+                print(likelihoodRatio)
         for i, wc0 in enumerate(self.wcs[:-1]):
             for wc1 in self.wcs[(i+1):]:
                 if wc0 == 'sm' and wc1 not in self.noLin:
                     likelihoodRatio += (self.linear[wc1](features)*wcValues[wc1]).flatten()
+                    print(likelihoodRatio)
                 else: 
                     likelihoodRatio += self.interference[(wc0,wc1)](features)*wcValues[wc0]*wcValues[wc1]
         return likelihoodRatio
