@@ -4,7 +4,7 @@ backgroundStartingPoint: ctq8=-0.91
 backgroundTrainingPoint: ctq8=-0.91
 batchSize: 1000
 device: cpu
-epochs: 300
+epochs: 2000
 factor: 0.1
 featureMeans:
 - - 78.80930289871067
