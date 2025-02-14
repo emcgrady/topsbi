@@ -1,0 +1,5 @@
+wcs: ctq8
+sm_quad: /scratch365/cmcgrad2/topsbi/examples/sm_quad.yml
+ctq8_quad: /scratch365/cmcgrad2/topsbi/examples/ctq8_quad.yml
+ctq8_linear: /scratch365/cmcgrad2/topsbi/examples/ctq8_-5.0.yml
+device: 'cpu'
