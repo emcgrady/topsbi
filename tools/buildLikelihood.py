@@ -9,8 +9,7 @@ class likelihood:
         self.model = Net(len(self.config['features'].split(',')), self.config['device'])
         self.model.load_state_dict(torch.load(f'{self.config["name"]}/last/networkStateDict.p',
                                               map_location=torch.device(self.config['device'])))
-        #self.norm = self.config['backgroundMean']/self.config['signalMean']
-        self.norm =1
+        self.norm = self.config['backgroundMean']/self.config['signalMean']
 
     def __call__(self, features):
         score = self.model(features.to(torch.float64))
@@ -64,15 +63,12 @@ class fullLikelihood:
         for wc in self.wcs:
             if wc == 'sm':
                 likelihoodRatio += (self.quad[wc](features)).flatten()
-                print(likelihoodRatio)
             else:
                 likelihoodRatio += (self.quad[wc](features)*wcValues[wc]**2).flatten()
-                print(likelihoodRatio)
         for i, wc0 in enumerate(self.wcs[:-1]):
             for wc1 in self.wcs[(i+1):]:
                 if wc0 == 'sm' and wc1 not in self.noLin:
                     likelihoodRatio += (self.linear[wc1](features)*wcValues[wc1]).flatten()
-                    print(likelihoodRatio)
                 else: 
                     likelihoodRatio += self.interference[(wc0,wc1)](features)*wcValues[wc0]*wcValues[wc1]
         return likelihoodRatio
