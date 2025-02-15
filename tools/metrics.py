@@ -1,7 +1,9 @@
 import torch
 
 def netEval(backgroundOutput, signalOutput, backgroundWeights, signalWeights, threshold=0.5, nPoints=200):
-    bins = torch.linspace(0, 1, nPoints + 1)
+    bins = torch.linspace(torch.min(backgroundOutput.min(),signalOutput.min()),
+                          torch.max(backgroundOutput.max(),signalOutput.max()),
+                          nPoints + 1)
     signalTotal =  signalWeights.sum()
     backgroundTotal = backgroundWeights.sum()
     tpr = []; fpr = []
