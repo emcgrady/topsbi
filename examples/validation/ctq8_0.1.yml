@@ -1,6 +1,6 @@
-ctq8_linear: /scratch365/cmcgrad2/topsbi/examples/training/ctq8_1.0.yml
+ctq8_linear: /scratch365/cmcgrad2/topsbi/examples/training/ctq8_0.1.yml
 ctq8_quad: /scratch365/cmcgrad2/topsbi/examples/training/ctq8_quad.yml
 sm_quad: /scratch365/cmcgrad2/topsbi/examples/training/sm_quad.yml
 wcValues:
-  ctq8: 1.0
+  ctq8: 0.1
 wcs: ctq8
