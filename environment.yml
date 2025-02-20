@@ -4,6 +4,7 @@ channels:
   - conda-forge
 dependencies:
   - conda-forge::python=3.11
+  - conda-forge::coffea=0.7
   - pytorch
   - matplotlib
   - tqdm
