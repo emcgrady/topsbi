@@ -9,11 +9,10 @@ class likelihood:
         self.model = Net(len(self.config['features'].split(',')), self.config['device'])
         self.model.load_state_dict(torch.load(f'{self.config["name"]}/last/networkStateDict.p',
                                               map_location=torch.device(self.config['device'])))
-        self.norm = self.config['backgroundMean']/self.config['signalMean']
 
     def __call__(self, features):
         score = self.model(features.to(torch.float64))
-        return self.norm*(score/(1-score))
+        return score/(1-score)
     
 class linearTerm:
     def __init__(self, sm, linear, quad):
@@ -44,7 +43,7 @@ class fullLikelihood:
     def __init__(self, config):
         with open(config) as f:
             self.config = yaml.safe_load(f.read())
-        self.wcs = ['sm'] + self.config['wcs'].split(",")
+        self.wcs = ['sm'] + list(self.config['wcValues'].keys())
         self.quad = {}; self.linear = {}; self.interference={}
         self.noLin = ['ctu1', 'cqd1', 'cqq13', 'cqu1', 'cqq11', 'ctd1', 'ctq1']
         for wc in self.wcs:
