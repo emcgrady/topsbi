@@ -18,6 +18,12 @@ Use the instructions found in the [PyTorch documentation](https://pytorch.org/ge
 ```sh
 pip3 install torch torchvision torchaudio
 ```
+The validation framework uses [topcoffea](https://github.com/TopEFT/topcoffea) as a baseline to compare to when reweighting. In any directory, topcoffea can be installed by the following commands.
+```sh
+git clone https://github.com/TopEFT/topcoffea.git
+cd topcoffea
+pip install .
+```
 ## Network Training
 All of the training is done through `train.py` which takes a single argument, a path to a configuration yaml. Examples of these yaml files can be found in the examples directory. As the fileds in these configuration files will be updated regulary as various features are added, a serpate README can be found in this directory. 
 
