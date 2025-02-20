@@ -4,12 +4,21 @@ from os.path import isfile
 import torch
 
 class DataLoader(data.Dataset):
-    def __init__(self, config):
+    def __init__(self, config, dataType='training'):
         self.config = config
         self.signalWCList = ['sm'] + self.config['signalStartingPoint'].replace(":", "_").replace("=", "_").split("_")[::2]
         self.backgroundWCList = ['sm'] + self.config['backgroundStartingPoint'].replace(":", "_").replace("=", "_").split("_")[::2]
         self.buildMapping()
-        self.buildTensors()
+        if dataType == 'training':
+            self.buildTensors()
+            self.backgroundWeight = f"{self.config['backgroundSample']}/{self.config['backgroundTrainingPoint'].replace('=','_').replace(':','_')}.p"
+            if self.config['signalTrainingTerm']:
+                self.signalWeight = f"{self.config['signalSample']}/{self.config['signalTrainingTerm']}.p"
+            else: 
+                self.signalWeight = f"{self.config['signalSample']}/{self.config['signalTrainingPoint'].replace('=','_').replace(':','_')}.p"
+        elif dataType == 'HistEFT':
+            self.backgroundWeight = f"{self.config['backgroundSample']}/fit_coefs.p"
+            self.signalWeight = f"{self.config['signalSample']}/fit_coefs.p"
         self.loadTensors()
     
     def __len__( self ):
@@ -70,11 +79,8 @@ class DataLoader(data.Dataset):
             torch.save(signalWeight, f"{self.config['backgroundSample']}/{self.config['backgroundTrainingPoint'].replace('=','_').replace(':','_')}.p")
 
     def loadTensors(self):
-        backgroundWeight   = torch.load(f"{self.config['backgroundSample']}/{self.config['backgroundTrainingPoint'].replace('=','_').replace(':','_')}.p").to(device=self.config['device'])
-        if self.config['signalTrainingTerm']:
-            signalWeight = torch.load(f"{self.config['signalSample']}/{self.config['signalTrainingTerm']}.p").to(device=self.config['device'])
-        else: 
-            signalWeight = torch.load(f"{self.config['signalSample']}/{self.config['signalTrainingPoint'].replace('=','_').replace(':','_')}.p").to(device=self.config['device'])
+        backgroundWeight = torch.load(self.backgroundWeight).to(device=self.config['device'])
+        signalWeight     = torch.load(self.signalWeight).to(device=self.config['device'])
 
         cap = backgroundWeight.size()[0]
         if signalWeight.size()[0] < 0:
