@@ -24,6 +24,6 @@ All of the training is done through `train.py` which takes a single argument, a 
 There are two cases for netwrok training, quadratic and other, which are determined by the configuration fields `signalTrainingTerm` and `signalTrainingPoint` respectively. To train a discriminator for a quadratic field, put `null` in the `signalTrainingPoint` field and put the name of the quadratic term (i.e. sm, ctq8, cdq1, etc.) in the `signalTrainingTerm` field.  Conversely, to train any other term, put `null` in the `signalTrainingTerm` field and a point in WC space (i.e. ctq8=2.5) in the `signalTrainingPoint` field. Note that for learning any cross-terms, the values for both BSM fields must be given. 
 
 ## Future Development Plans
-- [ ] Likelihood ratio builder 
-- [ ] Combined likelihood validation framework
+- [ ] Add quantitative measure to LR ROC recreation
+- [ ] Factor common fields for configuration yaml files
 - [ ] Network combination
