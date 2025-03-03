@@ -99,16 +99,12 @@ def main():
     model = Model(features=len(config['features'].split(",")),device=config['device'])
     data = DataLoader(config)
     #Normalize weights with their respective means
-    config['signalMean'] = torch.mean(data[:][1][data[:][2] == 1]).detach().cpu().item()
-    config['backgroundMean'] = torch.mean(data[:][1][data[:][2] == 0]).detach().cpu().item()
-    data[:][1][data[:][2] == 1] /= config['signalMean']; data[:][1][data[:][2] == 0] /= config['backgroundMean']
-    with open(parser.parse_args().config,"w") as f:
-        f.write(yaml.dump(config))
+    signalMean = torch.mean(data[:][1][data[:][2] == 1]); backgroundMean = torch.mean(data[:][1][data[:][2] == 0])
+    data[:][1][data[:][2] == 1] /= signalMean; data[:][1][data[:][2] == 0] /= backgroundMean
     
     train, test = torch.utils.data.random_split(data, [0.7, 0.3], generator=torch.Generator().manual_seed(42))
     dataloader  = torch.utils.data.DataLoader(train, batch_size=config['batchSize'], shuffle=True)
-
-    #optimizer = optim.SGD(model.net.parameters(), lr=config['learningRate'], momentum=config['momentum'])
+    
     optimizer = optim.Adam(model.net.parameters(), lr=config['learningRate'])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=config['factor'], patience=config['patience'])
     trainLoss = [model.loss(train[:][0], train[:][1], train[:][2]).item()]
