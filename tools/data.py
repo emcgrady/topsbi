@@ -97,3 +97,6 @@ class DataLoader(data.Dataset):
         self.weights       = torch.cat([signalWeight, backgroundWeight])
         self.targets       = torch.cat([torch.tensor([1], dtype=torch.float64, device=self.config['device']).repeat(backgroundFeatures.size(0)), 
                                         torch.tensor([0], dtype=torch.float64, device=self.config['device']).repeat(signalFeatures.size(0))])
+
+    def getFeatures(self):
+        return self.features * torch.Tensor(self.config['featureStdvs']) + torch.Tensor(self.config['featureMeans'])
