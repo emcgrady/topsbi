@@ -257,10 +257,9 @@ def main():
             + validation[:][1][:,1]*backgroundStartingPoint
             + validation[:][1][:,2]*backgroundStartingPoint**2).detach().numpy()
 
-    featureKey = dedicated.config['featuresKey'].split(',')
     wcs = split('=|:', dedicated.config['signalTrainingPoint'])
 
-    for key, value in dedicated.config['features'].items():
+    for i, (key, value) in enumerate(dedicated.config['features'].items()):
         i = featureKey.index(key)
         x = data[:][0][:,i].detach().numpy()*dedicated.config['featureStdvs'][0][i] + dedicated.config['featureMeans'][0][i]
         bins = np.linspace(value['min'], value['max'], value['nbins']+1)

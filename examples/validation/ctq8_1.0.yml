@@ -4,26 +4,6 @@ backgroundTrainingPoint: ctq8=-0.91
 ctq8_linear: /scratch365/cmcgrad2/topsbi/examples/training/ctq8_1.0.yml
 ctq8_quad: /scratch365/cmcgrad2/topsbi/examples/training/ctq8_quad.yml
 device: cpu
-featureMeans:
-- - 78.80930289871067
-  - 58.39421603853904
-  - -0.00011772410245100505
-  - 0.0008348145253911258
-  - 0.0014231621788882308
-  - 0.0005725314132025213
-  - 3.271963874184735
-  - 128.2177486917847
-  - 82.263557394292
-featureStdvs:
-- - 68.61745103684679
-  - 53.54563328167666
-  - 1.1287505871505314
-  - 1.1465802451292506
-  - 1.8147217664201065
-  - 1.8134256888175144
-  - 1.1443161670990778
-  - 85.5630267602896
-  - 47.56095921769085
 features:
   Lep1_eta:
     label: Leading Lepton $\eta$
@@ -56,6 +36,11 @@ features:
     min: 0
     nbins: 100
   jet1_pt:
+    label: Leading Jet $p_T$ (GeV)
+    max: 3700
+    min: 0
+    nbins: 100
+  jet2_pt:
     label: Sub-Leading Jet $p_T$ (GeV)
     max: 3700
     min: 0
@@ -65,7 +50,6 @@ features:
     max: 12.5
     min: 1.5
     nbins: 11
-featuresKey: Lep1_pt,Lep2_pt,Lep1_eta,Lep2_eta,Lep1_phi,Lep2_phi,nJet30,jet1_pt,jet2_pt
 signalSample: /scratch365/cmcgrad2/data/ttbar_ctq8
 signalStartingPoint: ctq8=7.0
 signalTrainingPoint: ctq8=1.0
