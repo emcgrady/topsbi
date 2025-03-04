@@ -1,36 +1,14 @@
-backgroundMean: 0.12177789636325849
-backgroundSample: /scratch365/cmcgrad2/data/NanoGen_TT01j2l_ctj8
-backgroundStartingPoint: ctq8=-0.91
+backgroundSample: /scratch365/cmcgrad2/data/ttbar_ctq8
+backgroundStartingPoint: ctq8=7.0
 backgroundTrainingPoint: ctq8=-0.91
 batchSize: 1000
 device: cpu
 epochs: 2000
 factor: 0.1
-featureMeans:
-- - 78.80930289871067
-  - 58.39421603853904
-  - -0.00011772410245100505
-  - 0.0008348145253911258
-  - 0.0014231621788882308
-  - 0.0005725314132025213
-  - 3.271963874184735
-  - 128.2177486917847
-  - 82.263557394292
-featureStdvs:
-- - 68.61745103684679
-  - 53.54563328167666
-  - 1.1287505871505314
-  - 1.1465802451292506
-  - 1.8147217664201065
-  - 1.8134256888175144
-  - 1.1443161670990778
-  - 85.5630267602896
-  - 47.56095921769085
-features: Lep1_pt,Lep2_pt,Lep1_eta,Lep2_eta,Lep1_phi,Lep2_phi,nJet30,jet1_pt,jet2_pt
 learningRate: 5.0e-05
 name: /scratch365/cmcgrad2/topsbi/test/ctq8_quad
 patience: 10
-signalMean: 0.00017427473674449886
+redoTensors: true
 signalSample: /scratch365/cmcgrad2/data/ttbar_ctq8
 signalStartingPoint: ctq8=7.0
 signalTrainingPoint: null

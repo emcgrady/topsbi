@@ -96,8 +96,8 @@ def main():
         config['device'] = 'cpu'
 
     #Load the model, loss funtion, and data
-    model = Model(features=len(config['features'].split(",")),device=config['device'])
     data = DataLoader(config)
+    model = Model(features=data[:][0].shape[1],device=config['device'])
     #Normalize weights with their respective means
     signalMean = torch.mean(data[:][1][data[:][2] == 1]); backgroundMean = torch.mean(data[:][1][data[:][2] == 0])
     data[:][1][data[:][2] == 1] /= signalMean; data[:][1][data[:][2] == 0] /= backgroundMean
