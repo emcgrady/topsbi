@@ -8,11 +8,11 @@ class Net(nn.Module):
         super().__init__()
         self.main_module = nn.Sequential( 
             nn.Linear(features, 32),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(32, 16),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(16, 8),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(8, 1),
             nn.Sigmoid(),
         )
