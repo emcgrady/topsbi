@@ -8,6 +8,7 @@ from os import makedirs
 
 import matplotlib.pyplot as plt
 
+import pickle
 import torch
 import yaml
 
@@ -97,6 +98,8 @@ def main():
 
     #Load the model, loss funtion, and data
     data = DataLoader(config)
+    with open(f'{config["name"]}/data.pkl', 'wb') as f:
+        pickle.dump(data,f,pickle.HIGHEST_PROTOCOL)
     model = Model(features=data[:][0].shape[1],device=config['device'])
     #Normalize weights with their respective means
     signalMean = torch.mean(data[:][1][data[:][2] == 1]); backgroundMean = torch.mean(data[:][1][data[:][2] == 0])
@@ -112,8 +115,8 @@ def main():
 
     for epoch in tqdm(range(config['epochs'])):
         if epoch%50==0: 
-         savePlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/epoch_{epoch:04d}')
-        for features, weights, targets in dataloader:
+         savePlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}')
+        for features, weights, targets, _ in dataloader:
             optimizer.zero_grad()
             loss = model.loss(features, weights, targets)
             loss.backward()
@@ -122,7 +125,7 @@ def main():
         testLoss.append(model.loss(test[:][0], test[:][1], test[:][2]).item())
         scheduler.step(testLoss[epoch])
         
-    savePlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/last')
+    savePlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/complete')
 
 if __name__=="__main__":
     main()

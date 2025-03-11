@@ -1,0 +1,20 @@
+backgroundSample: /scratch365/cmcgrad2/data/NanoGen_TT01j2l_ctj8
+backgroundStartingPoint:
+- -0.91
+backgroundTrainingPoint:
+- 1
+- -0.91
+batchSize: 1000
+device: cpu
+epochs: 2000
+factor: 0.1
+learningRate: 5.0e-05
+name: /scratch365/cmcgrad2/results/ctq8_only/two_sample/ctq8_0.1
+patience: 10
+redoTensors: true
+signalSample: /scratch365/cmcgrad2/data/ttbar_ctq8
+signalStartingPoint:
+- 7.0
+signalTrainingPoint:
+- 1
+- 0.1
