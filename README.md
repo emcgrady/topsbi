@@ -31,5 +31,4 @@ There are two cases for netwrok training, quadratic and other, which are determi
 
 ## Future Development Plans
 - [ ] Add quantitative measure to LR ROC recreation
-- [ ] Factor common fields for configuration yaml files
 - [ ] Network combination
