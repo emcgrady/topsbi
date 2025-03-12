@@ -1,15 +1,20 @@
-backgroundSample: /scratch365/cmcgrad2/data/ttbar_ctq8
-backgroundStartingPoint: ctq8=7.0
-backgroundTrainingPoint: ctq8=-0.91
+backgroundSample: /scratch365/cmcgrad2/data/NanoGen_TT01j2l_ctj8
+backgroundStartingPoint:
+- -0.91
+backgroundTrainingPoint:
+- 1
+- -0.91
 batchSize: 1000
 device: cpu
 epochs: 2000
 factor: 0.1
 learningRate: 5.0e-05
-name: /scratch365/cmcgrad2/topsbi/test/sm_quad
+name: /scratch365/cmcgrad2/results/ctq8_only/two_sample/sm_quad
 patience: 10
 redoTensors: true
 signalSample: /scratch365/cmcgrad2/data/ttbar_ctq8
-signalStartingPoint: ctq8=7.0
-signalTrainingPoint: null
-signalTrainingTerm: sm
+signalStartingPoint:
+- 7.0
+signalTrainingPoint:
+- 1
+- 0
