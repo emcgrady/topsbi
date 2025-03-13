@@ -53,7 +53,7 @@ class DataLoader(data.Dataset):
                 self.signalFeatures     = torch.load(f"{self.signalSample}/features.p")[:cap].to(device=self.device)
 
             index = 0
-            self.signalWeight = torch.zeros(self.signalStart.shape[0])
+            self.signalWeight = torch.zeros(self.signalStart.shape[0]).to(device=self.device)
             for i in range(len(self.signalTrainingPoint)):
                 for j in range(i+1):
                     if index == 0:
@@ -63,7 +63,7 @@ class DataLoader(data.Dataset):
                     index += 1
     
             index = 0
-            self.backgroundWeight = torch.zeros(self.backgroundStart.shape[0])
+            self.backgroundWeight = torch.zeros(self.backgroundStart.shape[0]).to(device=self.device)
 
             for i in range(len(self.backgroundTrainingPoint)):
                 for j in range(i+1):
@@ -78,12 +78,12 @@ class DataLoader(data.Dataset):
                 data = load(f)
             backgroundMask = data[:][2] == 0
             signalMask     = data[:][2] == 1
-            self.backgroundFeatures = data[:][0][backgroundMask, :] * data.stdvs + data.means
-            self.signalFeatures     = data[:][0][signalMask, :] * data.stdvs + data.means
-            self.backgroundWeight   = data[:][1][backgroundMask]
-            self.signalWeight       = data[:][1][signalMask]
-            self.backgroundStart    = data[:][3][backgroundMask]
-            self.signalStart        = data[:][3][signalMask]
+            self.backgroundFeatures = (data[:][0][backgroundMask, :] * data.stdvs + data.means).to(device=self.device)
+            self.signalFeatures     = (data[:][0][signalMask, :] * data.stdvs + data.means).to(device=self.device)
+            self.backgroundWeight   = (data[:][1][backgroundMask]).to(device=self.device)
+            self.signalWeight       = (data[:][1][signalMask]).to(device=self.device)
+            self.backgroundStart    = (data[:][3][backgroundMask]).to(device=self.device)
+            self.signalStart        = (data[:][3][signalMask]).to(device=self.device)
  
     def loadTensors(self):
         self.features  = torch.cat([self.backgroundFeatures, self.signalFeatures])
