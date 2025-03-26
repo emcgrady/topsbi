@@ -3,11 +3,11 @@ from yaml import safe_load
 from torch import load, device, float64
 
 class likelihood:
-    def __init__(self, config, nFeatures):
+    def __init__(self, config, nFeatures, network):
         with open(config) as f:
             self.config = safe_load(f)
         self.model = Net(nFeatures, self.config['device'])
-        self.model.load_state_dict(load(f'{self.config["name"]}/complete/networkStateDict.p',
+        self.model.load_state_dict(load(f'{self.config["name"]}/{network}/networkStateDict.p',
                                         map_location=device(self.config['device'])))
     def __call__(self, features):
         score = self.model(features.to(float64))
@@ -21,18 +21,19 @@ class linearTerm:
     def __call__(self, features):
         return (self.linear(features) - self.sm(features) - self.quad(features)*self.linearValue**2)/self.linearValue
 class fullLikelihood: 
-    def __init__(self, config):
+    def __init__(self, config, network):
         with open(config) as f:
             self.config = safe_load(f.read())
         self.quad = {}; self.linear = {}; self.wcValues = {}; nFeatures = len(self.config['features'])
-        self.quad['sm'] = likelihood(self.config['terms']['sm']['net'], nFeatures); self.wcValues['sm'] = self.config['terms']['sm']['value']
+        self.quad['sm'] = likelihood(self.config['terms']['sm']['net'], nFeatures, network=network) 
+        self.wcValues['sm'] = self.config['terms']['sm']['value']
         for term, params in self.config['terms'].items():
             self.wcValues[term] = params['value']
             if term != 'sm':
-                self.quad[term] = likelihood(params['quad'], nFeatures)
+                self.quad[term] = likelihood(params['quad'], nFeatures, network)
                 if 'linear' in params:
                     self.linear[term] = linearTerm(self.quad['sm'], 
-                                                   likelihood(params['linear'], nFeatures), 
+                                                   likelihood(params['linear'], nFeatures, network), 
                                                    params['value'],
                                                    self.quad[term])
     def __call__(self, features, wcValues):

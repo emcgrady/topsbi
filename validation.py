@@ -15,11 +15,12 @@ def main():
     parser.add_argument('--dedicated', '-d' , help = 'configuration yml file used for dedicated likelihood')
     parser.add_argument('--output', '-o' , help = 'location to save output plots')
     parser.add_argument('--validation_set', '-v', default='all', help = 'which dataset to use for validation. Can choose from all, test, or train')
+    parser.add_argument('--network', '-n', default='complete', help = 'which epoch to use for validation')
 
     args = parser.parse_args()
     makedirs(args.output, mode=0o755, exist_ok=True)
-    parametric = fullLikelihood(args.parametric)
-    dedicated  = fullLikelihood(args.dedicated)
+    parametric = fullLikelihood(args.parametric, args.network)
+    dedicated  = fullLikelihood(args.dedicated, args.network)
     with open(dedicated.config['data'], 'rb') as f:
         data = load(f)
     if args.validation_set == 'test':
