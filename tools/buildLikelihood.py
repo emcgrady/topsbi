@@ -1,73 +1,44 @@
 from model.net import Net
-import torch
-import yaml 
+from yaml import safe_load
+from torch import load, device, float64
 
 class likelihood:
-    def __init__(self, config):
+    def __init__(self, config, nFeatures):
         with open(config) as f:
-            self.config = yaml.safe_load(f)
-        self.model = Net(len(self.config['features'].split(',')), self.config['device'])
-        self.model.load_state_dict(torch.load(f'{self.config["name"]}/last/networkStateDict.p',
-                                              map_location=torch.device(self.config['device'])))
-
+            self.config = safe_load(f)
+        self.model = Net(nFeatures, self.config['device'])
+        self.model.load_state_dict(load(f'{self.config["name"]}/complete/networkStateDict.p',
+                                        map_location=device(self.config['device'])))
     def __call__(self, features):
-        score = self.model(features.to(torch.float64))
+        score = self.model(features.to(float64))
         return score/(1-score)
-    
 class linearTerm:
-    def __init__(self, sm, linear, quad):
+    def __init__(self, sm, linear, linearValue, quad):
         self.sm          = sm
         self.linear      = linear
         self.quad        = quad
-        self.linearValue = float(linear.config['signalTrainingPoint'].split('=')[1])
-
+        self.linearValue = linearValue
     def __call__(self, features):
         return (self.linear(features) - self.sm(features) - self.quad(features)*self.linearValue**2)/self.linearValue
-
-class interferenceTerm:
-    def __init__(self, linear, quad, interference):
-        self.sm = quad['sm']; self.linear = []; self.linearValue = []; self.quad = []
-        terms   = interference.config['signalTrainingPoint'].split(':')
-        for term in terms: 
-            wc, value = term.split['=']
-            self.linearValue += [float(value)]
-            self.quad        += [quad[wc]]
-            self.linear      += [linear[wc]]
-        self.interference = interference
-    def __call__(self, features):
-        return (self.interference(features)- self.linear[0](features)*self.linearValue[0] - self.quad[0](features)*self.linearValue[0]**2\
-                - self.linear[1](features)*self.linearValue[1] - self.quad[1](features)*self.linearValue[1]**2\
-                - self.sm(features))/(self.linearValue[0]*self.linearValue[1])
-     
 class fullLikelihood: 
     def __init__(self, config):
         with open(config) as f:
-            self.config = yaml.safe_load(f.read())
-        self.wcs = ['sm'] + list(self.config['wcValues'].keys())
-        self.quad = {}; self.linear = {}; self.interference={}
-        self.noLin = ['ctu1', 'cqd1', 'cqq13', 'cqu1', 'cqq11', 'ctd1', 'ctq1']
-        for wc in self.wcs:
-            self.quad[wc] = likelihood(self.config[f'{wc}_quad'])
-        for i, wc0 in enumerate(self.wcs[:-1]):
-            for wc1 in self.wcs[(i+1):]:
-                if wc0 == 'sm' and wc1 not in self.noLin:
-                    self.linear[wc1] = linearTerm(self.quad['sm'], likelihood(self.config[f'{wc1}_linear']), self.quad[wc1])
-                else:
-                    self.interference[(wc0,wc1)] = interferenceTerm(self.linear, self.quad, likelihood(self.config[f'{wc_0}_{wc_1}']))
+            self.config = safe_load(f.read())
+        self.quad = {}; self.linear = {}; self.wcValues = {}; nFeatures = len(self.config['features'])
+        self.quad['sm'] = likelihood(self.config['terms']['sm']['net'], nFeatures); self.wcValues['sm'] = self.config['terms']['sm']['value']
+        for term, params in self.config['terms'].items():
+            self.wcValues[term] = params['value']
+            if term != 'sm':
+                self.quad[term] = likelihood(params['quad'], nFeatures)
+                if 'linear' in params:
+                    self.linear[term] = linearTerm(self.quad['sm'], 
+                                                   likelihood(params['linear'], nFeatures), 
+                                                   params['value'],
+                                                   self.quad[term])
     def __call__(self, features, wcValues):
-        if set(self.wcs[1:]) != set(wcValues.keys()):
-            raise RuntimeError(f'Coefficient mismatch!\ncoeffs passed: {wcValues}\nconfig coeffs: {self.wcs}')
-            
         likelihoodRatio = 0
-        for wc in self.wcs:
-            if wc == 'sm':
-                likelihoodRatio += (self.quad[wc](features)).flatten()
-            else:
-                likelihoodRatio += (self.quad[wc](features)*wcValues[wc]**2).flatten()
-        for i, wc0 in enumerate(self.wcs[:-1]):
-            for wc1 in self.wcs[(i+1):]:
-                if wc0 == 'sm' and wc1 not in self.noLin:
-                    likelihoodRatio += (self.linear[wc1](features)*wcValues[wc1]).flatten()
-                else: 
-                    likelihoodRatio += self.interference[(wc0,wc1)](features)*wcValues[wc0]*wcValues[wc1]
+        for wc, value in wcValues.items():
+            likelihoodRatio += (self.quad[wc](features)*value**2).flatten()
+            if wc in self.linear:
+                likelihoodRatio += (self.linear[wc](features)*value).flatten()
         return likelihoodRatio
