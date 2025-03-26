@@ -8,11 +8,11 @@ class Net(nn.Module):
         super().__init__()
         self.main_module = nn.Sequential( 
             nn.Linear(features, 32),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(32, 16),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(16, 8),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(8, 1),
             nn.Sigmoid(),
         )
@@ -31,6 +31,5 @@ class Model:
         cost.to(device)
         
     def loss(self, features, weights, targets):
-        weights = torch.max((0, weights))
         cost.weight = weights
         return cost(self.net(features).squeeze(), targets)
