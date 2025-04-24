@@ -76,9 +76,12 @@ def savePlots(net, test, testLoss, trainLoss, label):
     plt.close()
     
     #save performance metrics
-    f = open(f'{label}/performance.txt','w+')
-    f.write(f'Area under ROC: {auc}\nAccuracy:       {a}\n')
-    f.close()
+    performance = {
+        'Area under ROC': auc,
+        'Accuracy': a
+    }
+    with open(f'{label}/performance.yml','w') as f:
+        f.write(yaml.dump(performance))
 
 def main():
     parser = ArgumentParser()
@@ -100,10 +103,12 @@ def main():
     data = DataLoader(config)
     with open(f'{config["name"]}/data.pkl', 'wb') as f:
         pickle.dump(data,f,pickle.HIGHEST_PROTOCOL)
-    model = Model(features=data[:][0].shape[1],device=config['device'])
+    model = Model(nFeatures=data[:][0].shape[1],device=config['device'], config=config['network'])
     #Normalize weights with their respective means
-    signalMean = torch.mean(data[:][1][data[:][2] == 1]); backgroundMean = torch.mean(data[:][1][data[:][2] == 0])
-    data[:][1][data[:][2] == 1] /= signalMean; data[:][1][data[:][2] == 0] /= backgroundMean
+    signalMean = torch.mean(data[:][1][data[:][2] == 1])
+    backgroundMean = torch.mean(data[:][1][data[:][2] == 0])
+    data[:][1][data[:][2] == 1] /= signalMean
+    data[:][1][data[:][2] == 0] /= backgroundMean
     
     train, test = torch.utils.data.random_split(data, [0.7, 0.3], generator=torch.Generator().manual_seed(42))
     dataloader  = torch.utils.data.DataLoader(train, batch_size=config['batchSize'], shuffle=True)
