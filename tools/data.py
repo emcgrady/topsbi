@@ -56,21 +56,15 @@ class DataLoader(data.Dataset):
             self.signalWeight = torch.zeros(self.signalStart.shape[0]).to(device=self.device)
             for i in range(len(self.signalTrainingPoint)):
                 for j in range(i+1):
-                    if index == 0:
-                        self.signalWeight += self.signalStart[:,index]*self.signalTrainingPoint[i]
-                    else:
-                        self.signalWeight += self.signalStart[:,index]*self.signalTrainingPoint[i]*self.signalTrainingPoint[j]
+                    self.signalWeight += self.signalStart[:,index]*self.signalTrainingPoint[i]*self.signalTrainingPoint[j]
                     index += 1
     
-            index = 0
             self.backgroundWeight = torch.zeros(self.backgroundStart.shape[0]).to(device=self.device)
 
+            index = 0
             for i in range(len(self.backgroundTrainingPoint)):
                 for j in range(i+1):
-                    if index == 0:
-                        self.backgroundWeight += self.backgroundStart[:,index]*self.backgroundTrainingPoint[i]
-                    else:
-                        self.backgroundWeight += self.backgroundStart[:,index]*self.backgroundTrainingPoint[i]*self.backgroundTrainingPoint[j]
+                    self.backgroundWeight += self.backgroundStart[:,index]*self.backgroundTrainingPoint[i]*self.backgroundTrainingPoint[j]
                     index += 1
         else:
             print('Loading tensors...')
