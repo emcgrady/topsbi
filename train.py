@@ -1,137 +1,65 @@
 from argparse import ArgumentParser
-from tools.metrics import netEval
-from tools.data import DataLoader
 from model.net import Model
-from torch import optim
-from tqdm import tqdm
 from os import makedirs
+from tools.buildLikelihood import expandArray
+from tools.data import dataLoader
+from tools.plots import networkPlots
+from torch import cuda, float64, Generator, manual_seed, mean, optim, zeros
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.utils.data import DataLoader, random_split, TensorDataset
+from tqdm import tqdm
+from yaml import safe_load
 
-import matplotlib.pyplot as plt
-
-import pickle
-import torch
-import yaml
-
-def savePlots(net, test, testLoss, trainLoss, label):
-    try:
-        makedirs(f'{label}')
-    except:
-        pass
-
-    #save the network
-    torch.save(net, f'{label}/network.p')
-    torch.save(net.state_dict(), f'{label}/networkStateDict.p')
-
-    fig, ax = plt.subplots(1, 1, figsize=[8,8])
+def main(config):
+    manual_seed(42)
     
-    #plot and save loss curves
-    ax.plot( range(len(testLoss)), trainLoss, label="Training dataset")
-    ax.plot( range(len(testLoss)), testLoss , label="Testing dataset")
-    ax.set_title(label.split('/')[-1], fontsize=14)
-    ax.legend()
-    fig.savefig(f'{label}/loss.png')
-    ax.set_yscale('log')
-    fig.savefig(f'{label}/lossLog.png')
-    plt.clf()
-    plt.close()
-
-    backgroundMask = test[:][2] == 0
-    signalMask     = test[:][2] == 1
-
-    #plot the network output
-    fig, ax = plt.subplots(1, 1, figsize=[12,7])
-    bins = torch.linspace(0,1,200)
-    ax.hist(net(test[:][0][backgroundMask]).ravel().detach().cpu().numpy(),
-            weights=test[:][1][backgroundMask].detach().cpu().numpy(),
-            bins=bins, alpha=0.5, label='Background', density=True)
-    ax.hist(net(test[:][0][signalMask]).ravel().detach().cpu().numpy(),
-            weights=test[:][1][signalMask].detach().cpu().numpy(),
-            bins=bins, alpha=0.5, label='Signal', density=True)
-    ax.set_xlabel('Network Output', fontsize=12)
-    ax.set_title(label.split('/')[-1], fontsize=14)
-    ax.legend()
-    fig.savefig(f'{label}/netOut.png')
-    ax.set_yscale('log')
-    fig.savefig(f'{label}/netOutLog.png')
-    plt.clf()
-    plt.close()
-
-    #get network performance metrics
-    fpr, tpr, auc, a = netEval(net(test[:][0][backgroundMask]), net(test[:][0][signalMask]),
-                         test[:][1][backgroundMask], test[:][1][signalMask])
-
-    #make ROC curves
-    fig, ax = plt.subplots(1, 1, figsize=[8,8])
-    ax.plot(fpr, tpr, label='Network Performance')
-    ax.plot([0,1],[0,1], ':', label='Baseline')
-    ax.legend()
-    ax.set_xlabel('False Positive Rate', fontsize=14)
-    ax.set_ylabel('True Positive Rate', fontsize=14)
-    ax.set_title(label.split('/')[-1], fontsize=14)
-    fig.savefig(f'{label}/roc.png')
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    fig.savefig(f'{label}/rocLog.png')
-    plt.clf()
-    plt.close()
-    
-    #save performance metrics
-    performance = {
-        'Area under ROC': auc,
-        'Accuracy': a
-    }
-    with open(f'{label}/performance.yml','w') as f:
-        f.write(yaml.dump(performance))
-
-def main():
-    parser = ArgumentParser()
-    parser.add_argument('config', help = 'configuration yml file used for training')
-    
-    #Load the configuration options and build the WC lists
-    with open(parser.parse_args().config, 'r') as f:
-        config = yaml.safe_load(f)
-    
-
-    torch.manual_seed(42)
-
     #Check for GPU availability and fall back on CPU if needed
-    if config['device'] != 'cpu' and not torch.cuda.is_available():
+    if config['device'] != 'cpu' and not cuda.is_available():
         print("Warning, you tried to use cuda, but its not available. Will use the CPU")
         config['device'] = 'cpu'
-
-    #Load the model, loss funtion, and data
-    data = DataLoader(config)
-    with open(f'{config["name"]}/data.pkl', 'wb') as f:
-        pickle.dump(data,f,pickle.HIGHEST_PROTOCOL)
-    model = Model(nFeatures=data[:][0].shape[1],device=config['device'], config=config['network'])
-    #Normalize weights with their respective means
-    signalMean = torch.mean(data[:][1][data[:][2] == 1])
-    backgroundMean = torch.mean(data[:][1][data[:][2] == 0])
-    data[:][1][data[:][2] == 1] /= signalMean
-    data[:][1][data[:][2] == 0] /= backgroundMean
     
-    train, test = torch.utils.data.random_split(data, [0.7, 0.3], generator=torch.Generator().manual_seed(42))
-    dataloader  = torch.utils.data.DataLoader(train, batch_size=config['batchSize'], shuffle=True)
+    #Load the model, loss funtion, and data
+    features, eftCoefs, truth = dataLoader(config)[:]
+    weights = zeros(truth.shape, dtype=float64)
+    weights[truth == 0] = eftCoefs[truth == 0]@expandArray(config['backgroundTrainingPoint'])
+    weights[truth == 1] = eftCoefs[truth == 1]@expandArray(config['signalTrainingPoint'])
+    model   = Model(nFeatures=features.shape[1],device=config['device'], config=config['network'])
+    #Normalize weights with their respective means
+    if config['normalization'] == 'weightMean':
+        weights[truth == 1] /= mean(weights[truth == 1])
+        weights[truth == 0] /= mean(weights[truth == 0])
+    elif config['normalization'] == 'unity':
+        weights[truth == 1] /= weights[truth == 1].max()
+        weights[truth == 0] /= weights[truth == 0].max()
+    
+    train, test = random_split(TensorDataset(features, weights, truth), [0.7, 0.3], generator=Generator().manual_seed(42))
+    dataloader  = DataLoader(train, batch_size=config['batchSize'], shuffle=True)
     
     optimizer = optim.Adam(model.net.parameters(), lr=config['learningRate'])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=config['factor'], patience=config['patience'])
+    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=config['factor'], patience=config['patience'])
     trainLoss = [model.loss(train[:][0], train[:][1], train[:][2]).item()]
     testLoss  = [model.loss(test[:][0],  test[:][1],  test[:][2]).item()]
 
     for epoch in tqdm(range(config['epochs'])):
         if epoch%50==0: 
-         savePlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}')
-        for features, weights, targets, _ in dataloader:
+         networkPlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}')
+        for features, weights, truth in dataloader:
             optimizer.zero_grad()
-            loss = model.loss(features, weights, targets)
+            loss = model.loss(features, weights, truth)
             loss.backward()
             optimizer.step()
         trainLoss.append(model.loss(train[:][0], train[:][1], train[:][2]).item())
         testLoss.append(model.loss(test[:][0], test[:][1], test[:][2]).item())
         scheduler.step(testLoss[epoch])
         
-    savePlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/complete')
+    networkPlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/complete')
 
 if __name__=="__main__":
-    main()
+    parser = ArgumentParser()
+    parser.add_argument('config', help = 'configuration yml file used for training')
+    
+    #Load the configuration options and build the WC lists
+    with open(parser.parse_args().config, 'r') as f:
+        config = safe_load(f)
+    main(config)
     
