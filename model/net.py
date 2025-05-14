@@ -1,6 +1,5 @@
-from torch import float64
+from torch import float64, nn
 from yaml import safe_load
-import torch.nn as nn
 
 cost =  nn.BCELoss(reduction='mean')
 
@@ -52,6 +51,6 @@ class Model:
         self.net  = Net(nFeatures, device, config)
         cost.to(device)
         
-    def loss(self, features, weights, targets):
+    def loss(self, features, weights, truth):
         cost.weight = weights
-        return cost(self.net(features).squeeze(), targets)
+        return cost(self.net(features).squeeze(), truth)
