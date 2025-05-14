@@ -1,0 +1,90 @@
+data: /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/data.pkl
+features:
+  Lep1_eta:
+    label: Leading Lepton $\eta$
+    loc: 2
+    max: 2.5
+    min: -2.5
+    nbins: 50
+  Lep1_phi:
+    label: Leading Lepton $\phi$
+    loc: 4
+    max: 3.15
+    min: -3.15
+    nbins: 50
+  Lep1_pt:
+    label: Leading Lepton $p_T$ (GeV)
+    loc: 0
+    max: 2500
+    min: 0
+    nbins: 50
+  Lep2_eta:
+    label: Sub-Leading Lepton $\eta$
+    loc: 3
+    max: 2.5
+    min: -2.5
+    nbins: 50
+  Lep2_phi:
+    label: Sub-Leading Lepton $\phi$
+    loc: 5
+    max: 3.15
+    min: -3.15
+    nbins: 50
+  Lep2_pt:
+    label: Sub-Leading Lepton $p_T$ (GeV)
+    loc: 1
+    max: 2500
+    min: 0
+    nbins: 50
+  jet1_pt:
+    label: Leading Jet $p_T$ (GeV)
+    loc: 7
+    max: 3700
+    min: 0
+    nbins: 50
+  jet2_pt:
+    label: Sub-Leading Jet $p_T$ (GeV)
+    loc: 8
+    max: 3700
+    min: 0
+    nbins: 50
+  jet_cos_theta:
+    label: Leading and Sub-Leading Jets Ratio of Rhos
+    loc: 11
+    max: 80
+    min: 0
+    nbins: 50
+  jet_delta_eta:
+    label: $\Delta\eta$ Between Leading and Sub-Leading Jets
+    loc: 12
+    max: 5
+    min: 0
+    nbins: 50
+  jet_delta_r:
+    label: $\Delta R$ Between Leading and Sub-Leading Jets
+    loc: 10
+    max: 6
+    min: 0
+    nbins: 50
+  lep_n_jet_mass:
+    label: Dilepton and Dijet Invariant Mass (GeV)
+    loc: 9
+    max: 6000
+    min: 0
+    nbins: 50
+  nJet30:
+    label: Number of Jets above 30 GeV
+    loc: 6
+    max: 12.5
+    min: 1.5
+    nbins: 11
+networks:
+- /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/sm_quad
+- /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/ctq8_0.01
+- /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/ctq8_-0.01
+- /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/ctq8_0.05
+- /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/ctq8_-0.05
+- /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5_/ctq8_0.1
+- /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/ctq8_-0.1
+- /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/ctq8_0.5
+- /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/ctq8_-0.5

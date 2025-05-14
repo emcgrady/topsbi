@@ -1,20 +1,24 @@
-backgroundSample: /scratch365/cmcgrad2/data/NanoGen_TT01j2l_ctj8
+backgroundSample: /scratch365/cmcgrad2/data/tensors/ctq8_1.5
 backgroundStartingPoint:
-- -0.91
+- 1.5
 backgroundTrainingPoint:
 - 1
-- -0.91
+- 1.5
 batchSize: 1000
+data: /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/data.pkl
 device: cpu
-epochs: 2000
+epochs: 1000
 factor: 0.1
 learningRate: 5.0e-05
-name: /scratch365/cmcgrad2/results/ctq8_only/two_sample/ctq8_quad
+name: /scratch365/cmcgrad2/results/ctq8_only/ctq8_1.5/ctq8_quad
+network: null
 patience: 10
 redoTensors: true
-signalSample: /scratch365/cmcgrad2/data/ttbar_ctq8
+signalSample: /scratch365/cmcgrad2/data/tensors/ctq8_1.5
 signalStartingPoint:
-- 7.0
+- 1.5
 signalTrainingPoint:
 - 0
 - 1
+wcs:
+- ctq8
