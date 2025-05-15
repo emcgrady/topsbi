@@ -88,21 +88,24 @@ def ratioPlot(x, dedicatedLR, parametricLR, eftCoeffs, bins, wcs, outname=None,
         paramtricRatio[nHistEft != 0] = nParametric[nHistEft != 0]/nHistEft[nHistEft != 0]
     else: 
         nHistEft = histEFTEval.values().flatten()
+        mask = (nHistEft != 0) & (nParametric > 0)
         dedicatedRatio = np.ones(nHistEft.shape)
-        dedicatedRatio[nHistEft != 0] = nDedicated[nHistEft != 0]/nHistEft[nHistEft != 0]
-        paramtricRatio = np.ones(nHistEft.shape)
-        paramtricRatio[nHistEft != 0] = nParametric[nHistEft != 0]/nHistEft[nHistEft != 0]
+        dedicatedRatio[mask] = nDedicated[mask]/nHistEft[mask]
+        parametricRatio = np.ones(nHistEft.shape)
+        parametricRatio[mask] = nParametric[mask]/nHistEft[mask]
         
     ax[1].hlines(1,ax[0].get_xlim()[0], ax[0].get_xlim()[1], color='k', linestyle='dashed')
     ax[1].plot((bins[1:] + bins[:-1])/2, dedicatedRatio, '^', label='Dedicated', color='orange')
-    ax[1].plot((bins[1:] + bins[:-1])/2, paramtricRatio, 'v', label='Parametric', color='green')
+    ax[1].plot((bins[1:] + bins[:-1])/2, parametricRatio, 'v', label='Parametric', color='green')
     ax[1].legend() 
 
     if ax[1].get_ylim()[0] > 0:
         order = max([np.log10(ax[1].get_ylim()[1]), abs(np.log10(ax[1].get_ylim()[0]))])
     else: 
-        order = np.log10(ax[1].get_ylim()[1])
-    if ratioLog or (order > 1):
+        lEdge = np.min((dedicatedRatio[dedicatedRatio != 0].min(), parametricRatio[parametricRatio != 0].min()))
+        uEdge = np.max((dedicatedRatio[dedicatedRatio != 0].max(), parametricRatio[parametricRatio != 0].max()))
+        order = np.max((abs(np.log10(lEdge)), abs(np.log10(uEdge))))
+    if ratioLog or (abs(order) > 1):
         ax[1].set_yscale('log')
         ax[1].set_ylim(10**(-order), 10**order)
     else:
