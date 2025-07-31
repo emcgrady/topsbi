@@ -1,13 +1,11 @@
-from torch import float64, nn
+from torch import cat, float64, nn, ones, zeros
 from yaml import safe_load
 
 cost =  nn.BCELoss(reduction='mean')
 
 def createModel(nFeatures, config):
-    with open(config, 'r') as f:
-        config =safe_load(f)
     layers = []
-    for i, layer in enumerate(config['model']['layers']):
+    for i, layer in enumerate(config):
         layerType = layer['type']
         if i == 0:
             if layerType == 'Linear':
@@ -49,8 +47,12 @@ class Model:
         device: device used to train the neural network
         '''
         self.net  = Net(nFeatures, device, config)
+        self.device = device
         cost.to(device)
         
-    def loss(self, features, weights, truth):
-        cost.weight = weights
+    def loss(self, features, backgroundWeights, signalWeights):
+        truth       = cat([zeros(backgroundWeights.shape[0], device=self.device), 
+                           ones(signalWeights.shape[0], device=self.device)]).to(float64)
+        features    = cat([features, features])
+        cost.weight = cat([backgroundWeights, signalWeights])
         return cost(self.net(features).squeeze(), truth)
