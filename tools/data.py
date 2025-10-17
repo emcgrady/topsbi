@@ -10,22 +10,22 @@ def expandArray(coefs):
     return tensor(arrayOut).to(float64)
 
 def prepareWeights(train, test, config):
+    if 'toSkip' in config.keys():
+        train[:][1][:, config['toSkip']] = 0
+        test[:][1][:,  config['toSkip']] = 0
     trainBW = train[:][1]@expandArray(config['backgroundTrainingPoint'])
     trainSW = train[:][1]@expandArray(config['signalTrainingPoint'])
     trainGW = train[:][1]@expandArray([1] + config['dataStartingPoint'])
-    trainSM = train[:][1]@expandArray([1] + [0]*(len(config['signalTrainingPoint']) - 1))
     
     testBW = test[:][1]@expandArray(config['backgroundTrainingPoint'])
     testSW = test[:][1]@expandArray(config['signalTrainingPoint'])
     testGW = test[:][1]@expandArray([1] + config['dataStartingPoint'])
-    testSM = test[:][1]@expandArray([1] + [0]*(len(config['signalTrainingPoint']) - 1))
 
     nEvents = testSW.shape[0] + trainSW.shape[0]
-    
-    config['sig2gen'] = (((trainSW/trainGW).sum() + (testSW/testGW).sum())/nEvents).item()
-    config['bkg2gen'] = (((trainBW/trainGW).sum() + (testBW/testGW).sum())/nEvents).item()
-    config['sig2bkg'] = (((trainSW/trainBW).sum() + (testSW/testBW).sum())/nEvents).item()
-    config['bkg2sm']  = (((trainBW/trainSM).sum() + (testBW/testSM).sum())/nEvents).item()
+
+    config['sig2bkg'] = ((trainSW.sum() + testSW.sum())/(trainBW.sum() + testBW.sum())).item()
+    config['sig2gen'] = ((trainSW.sum() + testSW.sum())/(trainGW.sum() + testGW.sum())).item()
+    config['bkg2gen'] = ((trainBW.sum() + testBW.sum())/(trainGW.sum() + testGW.sum())).item()
 
     with open(f'{config['name']}/training.yml', 'w') as f:
         dump(config, f)
