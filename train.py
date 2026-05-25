@@ -1,58 +1,63 @@
-from argparse import ArgumentParser
-from model.net import Model
-from torch import load, manual_seed, optim, float64, tensor
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
-from tools.buildLikelihood import expandArray
-from tools.plots import networkPlots
-from tools.data import prepareWeights
-from yaml import safe_load, dump
+from topsbi.model.net import Model
+from topsbi.tools.buildLikelihood import expandArray
+from topsbi.tools.plots import networkPlots
+from topsbi.tools.data import prepare_weights, prepare_features, get_probabilities
+
+import argparse, tqdm, torch, yaml
 
 def main(config):
-    manual_seed(42)
-    #Check for GPU availability and fall back on CPU if needed
-    if config['device'] != 'cpu' and not cuda.is_available():
+    if config['device'] != 'cpu' and not torch.cuda.is_available():
         print("Warning, you tried to use cuda, but its not available. Will use the CPU")
         config['device'] = 'cpu'
-    #load pre-split tensors
-    train = load(f'{config["data"]}/train.p', weights_only=False)
-    test  = load(f'{config["data"]}/test.p', weights_only=False)
-    #Normalize features
-    train[:][0][:] = (train[:][0] - train[:][0].mean(0))/train[:][0].std(0)
-    test[:][0][:]  = (test[:][0] - test[:][0].mean(0))/test[:][0].std(0)
+    torch.manual_seed(config['seed'])
 
-    train, test = prepareWeights(train, test, config)
+    test_feats,   test_coefs  = torch.load(f'{config["data"]}/test.p', weights_only=False)[:]
+    train_feats,  train_coefs = torch.load(f'{config["data"]}/train.p', weights_only=False)[:]
+    
+    if 'method' not in config.keys():
+        config['method'] = 'stitched'
+    
+    if config['method'] == 'parameterized':
+        test_p0,  test_p1,  test_wcs  = prepare_weights(test_coefs, config)
+        train_p0, train_p1, train_wcs = prepare_weights(train_coefs, config)
+        test_feats  = torch.concatenate([test_feats,  test_wcs],  dim=1)
+        train_feats = torch.concatenate([train_feats, train_wcs], dim=1)
+    elif config['method'] == 'stitched':
+        test_p0,  test_p1  = get_probabilities(test_coefs, config)
+        train_p0, train_p1 = get_probabilities(train_coefs, config)
 
-    batches = DataLoader(train, batch_size=config['batchSize'], shuffle=True, num_workers=4)
-    
-    model     = Model(nFeatures=test[:][0].shape[1], device=config['device'], config=config['network'])
-    optimizer = optim.Adam(model.net.parameters(), lr=config['learningRate'])
-    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=config['factor'], patience=config['patience'])
-    trainLoss = [model.loss(train[:][0], train[:][1], train[:][2]).item()]
-    testLoss  = [model.loss(test[:][0],  test[:][1],  test[:][2]).item()]
-    
-    for epoch in tqdm(range(config['epochs'])):
-        if epoch%50==0: 
-         networkPlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}')
-        for features, backgroundWeights, signaWeights in batches:
+    test_coefs  = None
+    train_coefs = None
+
+    test_feats  = prepare_features(test_feats)
+    train_feats = prepare_features(train_feats)
+
+    batches   = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(train_feats, train_p0, train_p1), 
+                                            batch_size=config['batchSize'], shuffle=True, num_workers=16)
+    model     = Model(nFeatures=test_feats.shape[1], device=config['device'], config=config['network'], seed=config['seed'])
+    optimizer = torch.optim.Adam(model.net.parameters(), lr=config['learningRate'])
+    trainLoss = [model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item()]
+    testLoss  = [model.loss(test_feats, test_p0, test_p1).item()]
+
+    for epoch in tqdm.tqdm(range(config['epochs'])):
+        if epoch%50 == 0:
+            networkPlots(test_feats, test_p0, test_p1, model.net, trainLoss, testLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}')
+        for train_feats, train_p0, train_p1 in batches:
             optimizer.zero_grad()
-            loss = model.loss(features, backgroundWeights, signaWeights)
+            loss = model.loss(train_feats, train_p0, train_p1)
             loss.backward()
             optimizer.step()
-        trainLoss.append(model.loss(train[:][0], train[:][1], train[:][2]).item())
-        testLoss.append(model.loss(test[:][0], test[:][1], test[:][2]).item())
-        scheduler.step(testLoss[epoch])
-        
-    networkPlots(model.net, test, testLoss, trainLoss, f'{config["name"]}/complete')
+        trainLoss.append(model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item())
+        testLoss.append(model.loss(test_feats, test_p0, test_p1).item())
+    networkPlots(test_feats, test_p0, test_p1, model.net, trainLoss, testLoss, f'{config["name"]}/complete')
 
     return config
 if __name__=="__main__":
-    parser = ArgumentParser()
+    parser = argparse.ArgumentParser()
     parser.add_argument('config', help = 'configuration yml file used for training')
     
     #Load the configuration options and build the WC lists
     with open(parser.parse_args().config, 'r') as f:
-        config = safe_load(f)
+        config = yaml.safe_load(f)
     config = main(config)
     

@@ -1,0 +1,94 @@
+batchSize: 1000
+c0:
+- 1.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+c1:
+- 1.0
+- 0.0
+- 0.0
+- 0.0
+- 0.1
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+cg:
+- 1.0
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- -0.5
+- -0.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+data: /groups/klannon/cmcgrad2/data/new_sample
+device: cpu
+epochs: 100
+factor: 0.1
+learningRate: 0.0005
+method: stitched
+name: /groups/klannon/cmcgrad2/results/fastTrain/gen/ctj8/1.0
+network:
+- activation: LeakyReLU
+  out: 128
+  type: Linear
+- activation: LeakyReLU
+  in: 128
+  out: 128
+  type: Linear
+- activation: Sigmoid
+  in: 128
+  out: 1
+  type: Linear
+patience: 10
+referencePoint: null
+seed: 42
+wcs:
+- cQd1
+- ctj1
+- cQj31
+- ctj8
+- ctd1
+- ctd8
+- ctGRe
+- ctGIm
+- cQj11
+- cQj18
+- ctu8
+- cQd8
+- ctu1
+- cQu1
+- cQj38
+- cQu8
