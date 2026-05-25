@@ -2,11 +2,8 @@ import torch
 
 cost =  torch.nn.BCELoss(reduction='mean')
 
-def createModel(
-    nFeatures, 
-    config: dict
-):
-    '''
+def createModel(nFeatures, config):
+    """
     Build a network based on a given dictionary. 
     
     Args:
@@ -14,7 +11,7 @@ def createModel(
         config: dictionary used to construct the network
     Returns:
         torch network 
-    '''
+    """
     layers = []
     for i, layer in enumerate(config):
         layerType = layer['type']
@@ -34,7 +31,7 @@ def createModel(
 
 class Net(nn.Module):
     def __init__(self, nFeatures, device, config):
-        '''
+        """
         Build DNN. 
 
         By default, network will build as nFeatures x 32 x 16 x 8 x 1. 
@@ -42,7 +39,7 @@ class Net(nn.Module):
             nFeatures: numner of inputs for network 
             device: torch device used network 
             config: dictionary used to construct the network
-        '''
+        """
         super().__init__()
         if config:
             self.main_module = createModel(nFeatures, config)
@@ -64,17 +61,17 @@ class Net(nn.Module):
     
 class Model:
     def __init__(self, nFeatures, device, config, seed):
-        '''
+        """
         features: inputs used to train the neural network
         device: device used to train the neural network
-        '''
+        """
         manual_seed(seed)
         self.net  = Net(nFeatures, device, config)
         self.device = device
         cost.to(device)
         
     def loss(self, features, w0, w1):
-        '''
+        """
         Get the weighted binary cross-entropy loss for a set of events. 
         Args:
             features: inputs used to train the neural network
@@ -82,7 +79,7 @@ class Model:
             w1: weight for events under theta1
         Returns:
             weighted loss 
-        '''
+        """
         truth       = torch.cat([torch.zeros(w0.shape[0], device=self.device), 
                                  torch.ones(w1.shape[0], device=self.device)])
         features    = torch.cat([features, features])
