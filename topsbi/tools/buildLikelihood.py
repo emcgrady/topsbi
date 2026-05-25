@@ -4,7 +4,7 @@ from topsbi.tools.data import expand_array, prepare_features
 import torch, tqdm, yaml
 
 sm = [1, 0.,  0.,  0.,  0.,  0.,  0.,   0.,   0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.,  0.]
-
+b
 class likelihood:
     def __init__(self, config, nFeatures):
         """
