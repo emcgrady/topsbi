@@ -1,7 +1,7 @@
 from topsbi.model.net import Model
-from topsbi.tools.buildLikelihood import expandArray
+from topsbi.tools.buildLikelihood import expand_array
 from topsbi.tools.plots import networkPlots
-from topsbi.tools.data import prepare_weights, prepare_features, get_probabilities
+from topsbi.tools.data import parameterize_weights, prepare_features, get_probabilities
 
 import argparse, tqdm, torch, yaml
 
@@ -18,13 +18,17 @@ def main(config):
         config['method'] = 'stitched'
     
     if config['method'] == 'parameterized':
-        test_p0,  test_p1,  test_wcs  = prepare_weights(test_coefs, config)
-        train_p0, train_p1, train_wcs = prepare_weights(train_coefs, config)
+        test_p0,  test_p1,  test_wcs  = parameterize_weights(test_coefs, config)
+        train_p0, train_p1, train_wcs = parameterize_weights(train_coefs, config)
         test_feats  = torch.concatenate([test_feats,  test_wcs],  dim=1)
         train_feats = torch.concatenate([train_feats, train_wcs], dim=1)
     elif config['method'] == 'stitched':
         test_p0,  test_p1  = get_probabilities(test_coefs, config)
         train_p0, train_p1 = get_probabilities(train_coefs, config)
+    elif config['method'] == 'alice':
+        test_p0,  test_p1  = get_probabilities(test_coefs, config)
+        train_p0, train_p1 = get_probabilities(train_coefs, config)
+        test_p0 /= 2; test_p1 /= 2; train_p0 /= 2; train_p1 /= 2
 
     test_coefs  = None
     train_coefs = None
@@ -34,14 +38,16 @@ def main(config):
 
     batches   = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(train_feats, train_p0, train_p1), 
                                             batch_size=config['batchSize'], shuffle=True, num_workers=16)
-    model     = Model(nFeatures=test_feats.shape[1], device=config['device'], config=config['network'], seed=config['seed'])
+    model     = Model(nFeatures=test_feats.shape[1], method=config['method'], 
+                      device=config['device'], config=config['network'], seed=config['seed'])
     optimizer = torch.optim.Adam(model.net.parameters(), lr=config['learningRate'])
     trainLoss = [model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item()]
     testLoss  = [model.loss(test_feats, test_p0, test_p1).item()]
 
     for epoch in tqdm.tqdm(range(config['epochs'])):
         if epoch%50 == 0:
-            networkPlots(test_feats, test_p0, test_p1, model.net, trainLoss, testLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}')
+            networkPlots(test_feats, test_p0, test_p1, model.net, trainLoss, 
+                         testLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}')
         for train_feats, train_p0, train_p1 in batches:
             optimizer.zero_grad()
             loss = model.loss(train_feats, train_p0, train_p1)

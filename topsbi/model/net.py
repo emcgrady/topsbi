@@ -27,9 +27,9 @@ def createModel(nFeatures, config):
             layers.append(torch.nn.LeakyReLU())
         elif layer['activation'] == 'Sigmoid':
             layers.append(torch.nn.Sigmoid())
-    return nn.Sequential(*layers)
+    return torch.nn.Sequential(*layers)
 
-class Net(nn.Module):
+class Net(torch.nn.Module):
     def __init__(self, nFeatures, device, config):
         """
         Build DNN. 
@@ -60,14 +60,15 @@ class Net(nn.Module):
         return self.main_module(x)
     
 class Model:
-    def __init__(self, nFeatures, device, config, seed):
+    def __init__(self, nFeatures, method, device, config, seed):
         """
         features: inputs used to train the neural network
         device: device used to train the neural network
         """
-        manual_seed(seed)
+        torch.manual_seed(seed)
         self.net  = Net(nFeatures, device, config)
         self.device = device
+        self.method = method
         cost.to(device)
         
     def loss(self, features, w0, w1):
@@ -80,9 +81,12 @@ class Model:
         Returns:
             weighted loss 
         """
-        truth       = torch.cat([torch.zeros(w0.shape[0], device=self.device), 
-                                 torch.ones(w1.shape[0], device=self.device)])
-        features    = torch.cat([features, features])
-        cost.weight = torch.cat([w0, w1])
+        if self.method == 'alice': 
+            truth = w1/(w0 + w1)
+        else: 
+            truth       = torch.cat([torch.zeros(w0.shape[0], device=self.device), 
+                                     torch.ones(w1.shape[0], device=self.device)])
+            features    = torch.cat([features, features])
+            cost.weight = torch.cat([w0, w1])
         netOut = self.net(features).squeeze()
         return cost(netOut, truth)
