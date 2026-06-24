@@ -2,6 +2,7 @@ from hist import Hist
 from hist.axis import Regular, StrCategory
 from matplotlib.axes import Axes
 from matplotlib.ticker import StrMethodFormatter
+from matplotlib.animation import FuncAnimation, PillowWriter
 from topsbi.tools.buildLikelihood import expand_array
 from topsbi.tools.metrics import netEval
 from topcoffea.modules.histEFT import HistEFT
@@ -10,7 +11,114 @@ import numpy as np
 import matplotlib.pyplot as plt
 import mplhep as mh
 
-import os, torch, yaml
+import os, torch, yaml, hist
+
+
+
+def animate_plots(plots, outname, fps=5):
+    """
+    Create an animation from a list of plots.
+
+    Args:
+        plots: list of file names for the plots to be included in the animation
+        outname: name for saving the animation
+        fps: frames per second for the animation
+    """
+    plots = sorted(p for p in plots if p.endswith('.png'))
+    if not plots:
+        raise ValueError('animate_plots requires at least one PNG frame')
+    fig, ax = plt.subplots()
+    fig.subplots_adjust(top=1, bottom=0, left=0, right=1)
+    ax.axis('off')
+    image = ax.imshow(plt.imread(plots[0]))
+
+    def animate(i):
+        image.set_data(plt.imread(plots[i]))
+        return (image,)
+
+    anim = FuncAnimation(fig, animate, frames=len(plots), interval=200, blit=True)
+    anim.save(outname, writer=PillowWriter(fps=fps))
+    plt.close(fig)
+
+
+def kinematic_histogram(x, params, epoch, learned_lr, true_lr, outname):
+    '''
+    Histogram of learned and true likelihood ratio as a function of a kinematic variable.
+
+    Args:
+        x: Kinematic to be plotted
+        params: dictionary containing plotting information
+        epoch: epoch number for plot title
+        learned_lr: learned likelihood ratio for each event
+        true_lr: true likelihood ratio for each event
+        outname: name for saving the plot
+    '''
+    learned = hist.Hist(
+        hist.axis.Regular(name='learned', 
+            label= params['label'],
+            bins=params['nbins'],
+            start=params['min'],
+            stop=params['max']
+        )
+    )
+    correct = hist.Hist(
+        hist.axis.Regular(
+            name='correct', 
+            label= params['label'],
+            bins=params['nbins'],
+            start=params['min'],
+            stop=params['max']
+        )
+    )
+    
+    learned.fill(x, weight=learned_lr)
+    correct.fill(x, weight=true_lr)
+    
+    mh.style.use("CMS")
+    ax   = []
+    fig  = plt.figure()
+    grid = fig.add_gridspec(2, 1, hspace=0.05, height_ratios=[5, 1])
+    ax  += [fig.add_subplot(grid[0])]
+    ax  += [fig.add_subplot(grid[1], sharex=ax[0])]
+    fig.suptitle(f'Epoch {epoch:04d}')
+    
+    learned.plot1d(ax=ax[0], label=r'$\hat{r}\,(x;\theta_1,\theta_0)$')
+    correct.plot1d(ax=ax[0], linestyle='dashed', label=r'$r\,(x,z;\theta_1,\theta_0)$')
+
+    n_learned, bins = learned.to_numpy()
+    n_correct, _    = correct.to_numpy()
+
+    ax[0].set_yscale('log')
+    ax[0].set_xlabel('')
+    ax[0].set_xlim(bins[0], bins[-1])
+    plt.setp(ax[0].get_xticklabels(), visible=False)
+
+    lErr = []
+    cErr = []
+    for i in range(params['nbins']):
+        lErr.append((learned_lr[ (x > bins[i]) & (x < bins[i+1])]**2).sum()) 
+        cErr.append((true_lr[(x > bins[i]) & (x < bins[i+1])]**2).sum())
+    lErr = np.sqrt(lErr)
+    cErr = np.sqrt(cErr)
+
+    ax[0].errorbar((bins[:-1] + bins[1:])/2, n_learned, yerr=lErr,ecolor='C0', fmt='none')
+    ax[0].errorbar((bins[:-1] + bins[1:])/2, n_correct, yerr=cErr,ecolor='C1', fmt='none')  
+
+
+    ratio = np.divide(n_learned, n_correct, where=(n_correct > 0))
+    rErr = ratio * np.sqrt(np.divide(lErr, n_learned, where=(n_learned > 0))**2 + np.divide(cErr, n_correct, where=(n_correct > 0))**2)
+
+
+    ax[1].plot((bins[:-1] + bins[1:])/2, ratio, '.k') 
+    ax[1].errorbar((bins[:-1] + bins[1:])/2, ratio, yerr=rErr, fmt='none', color='k')
+    ax[1].hlines(1, bins[0], bins[-1], color='k', linestyle='dashed', alpha=0.5)
+    ax[1].set_ylim(0,2)
+    ax[1].set_xlabel(params['label'])
+    ax[0].legend()
+    fig.savefig(outname)
+    plt.close(fig)
+
+    return 
 
 def kinematicRatioPlot(
     x: np.array, 
@@ -66,8 +174,8 @@ def kinematicRatioPlot(
                       )
     
     #convert the likelihood ratio to weights
-    bkg  = fitCoefs@expandArray(params['backgroundTrainingPoint']).detach().numpy()
-    sig  = fitCoefs@expandArray(params['signalTrainingPoint']).detach().numpy()
+    bkg  = fitCoefs@expand_array(params['backgroundTrainingPoint']).detach().numpy()
+    sig  = fitCoefs@expand_array(params['signalTrainingPoint']).detach().numpy()
     norm = sig.sum()/bkg.sum()*bkg/x.shape[0]
     dedi = dlr*norm
     para = plr*norm
@@ -165,8 +273,8 @@ def networkPlots(features, p0, p1, net, train_loss, test_loss, label):
     performance = {}
     
     #convert tensors to np arrays
-    s      = net(features).ravel().detach().cpu().numpy()
-    noOnes = s < 1
+    s      = net(features).cpu().detach().numpy().flatten()
+    noOnes = s != 1
     s      = s[noOnes]
     p0     = p0.detach().cpu().numpy()[noOnes]
     p1     = p1.detach().cpu().numpy()[noOnes]
@@ -368,9 +476,7 @@ def lrMeanPlot(
     xerr = abs(np.stack([xcenter - qbins[:-1], qbins[1:] - xcenter], axis=0))
     
     mbins = 0.5 * (qbins[1:] + qbins[:-1])
-    handle = ax.errorbar(
-        xcenter, mean, xerr=xerr, yerr=err_mean, fmt='.',  markersize=10, capsize=6, linewidth=3
-    )
+    ax.errorbar(xcenter, mean, xerr=xerr, yerr=err_mean, fmt='.')
 
     chiSquare = (xcenter - mean)**2/(lr.max() - lr.min())**2
     chiSquare = chiSquare[~np.isnan(chiSquare)]
@@ -378,8 +484,8 @@ def lrMeanPlot(
     
     ax.plot([qbins[0], qbins[-1]], [qbins[0], qbins[-1]], color = 'grey', linestyle = '--', label = '_nolegend_')
     mh.cms.label("Preliminary", data=False, lumi=137.64, com=13, ax=ax)
-    ax.set_xlabel(r'$\hat{\overline{r}}\,(x;c_0,c_1)\cdot p(x,z;c_0)$')
-    ax.set_ylabel(r'$\overline{r}\,(x,z;c_0,c_1)\cdot p(x,z;c_0)$')
+    ax.set_xlabel(r'$\hat{\overline{r}}\,(x;c_0,c_1)$')
+    ax.set_ylabel(r'$\overline{r}\,(x,z;c_0,c_1)$')
 
     return chiSquare
 
@@ -424,9 +530,7 @@ def sMeanPlot(
     xerr = abs(np.stack([xcenter - qbins[:-1], qbins[1:] - xcenter], axis=0))
     
     mbins = 0.5 * (qbins[1:] + qbins[:-1])
-    handle = ax.errorbar(
-        xcenter, mean, xerr=xerr, yerr=err_mean, fmt='.', markersize=10, capsize=6, linewidth=3
-    )
+    ax.errorbar(xcenter, mean, xerr=xerr, yerr=err_mean, fmt='.')
     
     chiSquare = (xcenter - mean)**2/(s.max() - s.min())**2
     chiSquare = chiSquare[~np.isnan(chiSquare)]
@@ -434,8 +538,8 @@ def sMeanPlot(
     
     ax.plot([qbins[0], qbins[-1]], [qbins[0], qbins[-1]], color = 'grey', linestyle = '--', label = '_nolegend_')
     mh.cms.label("Preliminary", data=False, lumi=137.64, com=13, ax=ax)
-    ax.set_xlabel(r'$\hat{\overline{s}}\,(x;c_0,c_1)\cdot (p(x,z;c_0) + p(x,z;c_1))$')
-    ax.set_ylabel(r'$\overline{s}\,(x,z;c_0,c_1)\cdot (p(x,z;c_0) + p(x,z;c_1))$')
+    ax.set_xlabel(r'$\hat{\overline{s}}\,(x;c_0,c_1)$')
+    ax.set_ylabel(r'$\overline{s}\,(x,z;c_0,c_1)$')
 
     return chiSquare
 
@@ -501,6 +605,6 @@ def hist2d(
     ax.set_ylim(amin, amax)
     ax.plot([0, 1], [0, 1], color = 'grey', linestyle = "--", transform = ax.transAxes, label = '_nolegend_', linewidth=3)
     mh.cms.label("Preliminary", data=False, lumi=137.64, com=13, ax=ax)
-    ax.set_xlabel(r'Learned $\log(\hat{r})$')
-    ax.set_ylabel(r'Calculated $\log(\hat{r})$')
+    ax.set_xlabel(r'Learned $\log[\hat{r}(x;\theta_1,\theta_0)]$')
+    ax.set_ylabel(r'$\log[r(x,z:\theta_1,\theta_0)]$')
     return h

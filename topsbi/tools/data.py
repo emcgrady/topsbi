@@ -69,6 +69,12 @@ def get_probabilities(
     p0 /= p0.sum()
     p1 /= p1.sum()
 
+    if ('cr' in config.keys()) and (config['cr'] is not None):
+        print(f'Reference hypothesis set. Calculating likelihood ratio with respect to \n    {config["cr"]}')
+        pr  = coefs@expand_array(config['cr'])
+        pr /= pr.sum()
+        p0 /= pr
+        p1 /= pr
     return p0, p1
 
 def prepare_features(
@@ -88,7 +94,6 @@ def toy_builder(
     tar_prob: torch.tensor, 
     can_prob: torch.tensor, 
     tar_events: int, 
-    ntoys: int = 1, 
     M: float = None,
     n_workers: int = 32,
 ) -> torch.tensor:
@@ -100,7 +105,6 @@ def toy_builder(
         tar_prob: target toy probability distribution
         can_prob: candidate distribution to create toy with
         tar_events: target number of toy events to draw a poisson from
-        ntoys: number of toys to generate
         M: constant, finite bound on the likelihood ratio between tarProb and canProb (note: M > tarProb/canProb)
         n_workers: number of workers to use in rejection sample loop
     Returns:
@@ -109,11 +113,11 @@ def toy_builder(
     min_m = (tar_prob/can_prob).max().item()
     print(f'Minimum M is {min_m:.2e}...')
     if M is None:
-        M = min_m*1.01
-        print(f'No M chosen. Setting M to 1% above its minimum ({M:.2e})')
+        M = min_m*1.0001
+        print(f'No M chosen. Setting M to 0.01% above its minimum ({M:.2e})')
     elif M <= min_m:
-        M = min_m*1.01
-        print(f'Choice of M is too low! Setting M to 1% above its minimum ({M:.2e})')
+        M = min_m*1.0001
+        print(f'Choice of M is too low! Setting M to 0.01% above its minimum ({M:.2e})')
     else: 
         print(f'Using M={M:.2f}')
     threshold = tar_prob/(M*can_prob)
@@ -121,17 +125,17 @@ def toy_builder(
     batches   = DataLoader(TensorDataset(threshold, indices), batch_size=1_000, shuffle=True, num_workers=n_workers)
     event_mask = []
     print('Rejection sampler prepared')
-    for l in tqdm.tqdm(range(ntoys)):
-        enough   = False
-        total    = 0
-        temp_mask = []
-        n_events  = poisson(tar_events)
-        while not enough:
-            last = total
-            for t, index in batches:
-                 temp_mask += [index[torch.where(torch.rand(len(t)) < t)[0]]]
-            total = len(temp_mask)
-            if total > n_events: 
-                enough = True
-        event_mask += [torch.concatenate(temp_mask)[torch.randint(torch.concatenate(temp_mask).shape[0], (n_events,))]]
-    return torch.concatenate(event_mask)
+    enough    = False
+    total     = 0
+    n_events  = poisson(tar_events)
+    pbar      = tqdm.tqdm(total=n_events)
+    while not enough:
+        last = total
+        for t, index in batches:
+                event_mask += [index[torch.where(torch.rand(len(t)) < t)[0]]]
+        total = len(event_mask)
+        pbar.update(total - last)
+        if total > n_events: 
+            enough = True
+    pbar.close()
+    return torch.concatenate(event_mask)[:n_events]
