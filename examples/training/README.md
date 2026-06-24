@@ -4,6 +4,7 @@
 - `c0`: SM-inclusive set of WCs for label-0 events
 - `c1`: SM-inclusive set of WCs for label-1 events (not used in parameterized training)
 - `cg`: SM-inclusive set of WCs used to generate the sample
+- `cr`: optional reference hypothesis to divide `c0` adn `c1` by 
 - `data`: directory containing torch `TensorDatet`s with features in tuple index 0 and fit coefficients in tuple index 1. Training expects to see `train.p` and `test.p` in this directory for testing and training datasets, respectively
 - `device`: The device used for training. Use `cpu` for CPU training and `cuda` for GPU training. For more options, see the [PyTorch documentation](https://pytorch.org/docs/stable/tensor_attributes.html#torch-device).
 - `epochs`: The number of epochs used to train.

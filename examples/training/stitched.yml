@@ -53,6 +53,24 @@ cg:
 - 1.5
 - 1.5
 - 1.5
+cr:
+- 1.0
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- -0.5
+- -0.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
+- 1.5
 data: /groups/klannon/cmcgrad2/data/new_sample
 device: cpu
 epochs: 100
@@ -73,7 +91,6 @@ network:
   out: 1
   type: Linear
 patience: 10
-referencePoint: null
 seed: 42
 wcs:
 - cQd1
