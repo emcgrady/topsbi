@@ -50,6 +50,13 @@ def main(config):
     for feature in features_config.keys():
         os.makedirs(f'{config["name"]}/incomplete/kinematics/{feature}', exist_ok=True)
 
+    # early stopping parameters
+    patience      = config.get('patience', 10)
+    best_test_loss = float('inf')
+    best_epoch     = 0
+    patience_count = 0
+    best_state     = None
+
     for epoch in tqdm.tqdm(range(config['epochs'])):
         s  = model.net(norm_test).cpu().detach().numpy().flatten()
         noOnes = s != 1
@@ -68,7 +75,23 @@ def main(config):
             loss = model.loss(train_feats, train_p0, train_p1)
             loss.backward()
             optimizer.step()
-        testLoss.append(model.loss(norm_test, test_p0, test_p1).item())
+        current_test_loss = model.loss(norm_test, test_p0, test_p1).item()
+        testLoss.append(current_test_loss)
+
+        # ── early stopping ──
+        if current_test_loss < best_test_loss:
+            best_test_loss = current_test_loss
+            best_epoch     = epoch
+            best_state     = {k: v.clone() for k, v in model.net.state_dict().items()}
+            patience_count = 0
+        else:
+            patience_count += 1
+            if patience_count >= patience:
+                print(f"[INFO] early stopping at epoch {epoch}, best epoch was {best_epoch} (test loss {best_test_loss:.4f})")
+                break
+
+    # NOTE: plots below reflect weights at the epoch training stopped on,
+    # which may differ from the best checkpoint saved to model.pt below.
     networkPlots(norm_test, test_p0, test_p1, model.net, trainLoss, testLoss, f'{config["name"]}/complete')
     s  = model.net(norm_test).cpu().detach().numpy().flatten()
     noOnes = s != 1
@@ -80,7 +103,16 @@ def main(config):
                             f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}.png')
         plots = sorted(glob.glob(f'{config["name"]}/incomplete/kinematics/{feature}/*.png'))
         animate_plots(plots, f'{config["name"]}/complete/animations/{feature}.gif')
+
+    if best_state is not None:
+        model.net.load_state_dict(best_state)
+        print(f"[INFO] restored best checkpoint from epoch {best_epoch}")
+
+    # keep the best model for validation
+    torch.save(model.net.state_dict(), f'{config["name"]}/model.pt')
+
     return config
+
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('config', help = 'configuration yml file used for training')
