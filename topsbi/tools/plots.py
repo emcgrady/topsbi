@@ -263,8 +263,16 @@ def loss_curve(
     ax.set_xlabel('Epoch')
     ax.set_ylabel('Loss')
     ax.legend()
-    
-def networkPlots(features, p0, p1, net, train_loss, test_loss, label):
+
+def lr_curve(
+    ax: Axes,
+    lr_history: list[float],
+) -> None:
+    ax.plot(lr_history, linewidth=3, color='tab:orange')
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Learning Rate')
+
+def networkPlots(features, p0, p1, net, train_loss, test_loss, label, lr_history=None):
     mh.style.use("CMS")
     os.makedirs(f'{label}', mode=0o755, exist_ok=True)
     torch.save(net, f'{label}/network.p')
@@ -289,6 +297,14 @@ def networkPlots(features, p0, p1, net, train_loss, test_loss, label):
     fig.savefig(f'{label}/lossLog.png')
     plt.clf()
     plt.close()
+
+    if lr_history is not None:
+        fig, ax = plt.subplots()
+        lr_curve(ax, lr_history)
+        mh.cms.label("Preliminary", data=False, lumi=137.64, com=13, ax=ax)
+        fig.savefig(f'{label}/lr.png')
+        plt.clf()
+        plt.close()
 
     #plot the network output
     fig, ax = plt.subplots()

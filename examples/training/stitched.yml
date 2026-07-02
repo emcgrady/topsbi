@@ -74,8 +74,11 @@ cr:
 data: /groups/klannon/cmcgrad2/data/new_sample
 device: cpu
 epochs: 100
-factor: 0.1
 learningRate: 0.0005
+scheduler: plateau   # 'plateau' (default) | 'cosine' | 'none'
+factor: 0.1        # ReduceLROnPlateau: multiplicative LR decay factor
+lr_patience: 5     # ReduceLROnPlateau: epochs without improvement before LR step
+warmup_epochs: 5     # cosine only: linear-warmup length before cosine decay
 method: stitched
 name: /groups/klannon/cmcgrad2/results/fastTrain/gen/ctj8/1.0
 network:
