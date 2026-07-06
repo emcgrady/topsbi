@@ -47,6 +47,7 @@ def main(config):
     testLoss  = [model.loss(norm_test, test_p0, test_p1).item()]
 
     os.makedirs(f'{config["name"]}/complete/animations', exist_ok=True)
+    os.makedirs(f'{config["name"]}/complete/kinematics', exist_ok=True)
     for feature in features_config.keys():
         os.makedirs(f'{config["name"]}/incomplete/kinematics/{feature}', exist_ok=True)
 
@@ -57,8 +58,12 @@ def main(config):
         lr = s / (1 - s)
         tlr = (test_p1/test_p0).detach().cpu().numpy().flatten()
         for feature, params in features_config.items():
-            kinematic_histogram(test_feats[noOnes, params['loc']].cpu().numpy(), params, epoch, lr, tlr[noOnes], 
-                                f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}.png')
+            if epoch == 0:
+                ylim = kinematic_histogram(test_feats[noOnes, params['loc']].cpu().numpy(), params, epoch, lr, tlr[noOnes], 
+                                           f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}.png')
+            else: 
+                kinematic_histogram(test_feats[noOnes, params['loc']].cpu().numpy(), params, epoch, lr, tlr[noOnes], 
+                                    f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}.png', ylim=ylim)
         trainLoss.append(model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item())
         if epoch%50 == 0:
             networkPlots(norm_test, test_p0, test_p1, model.net, trainLoss, 
@@ -77,7 +82,9 @@ def main(config):
     tlr = (test_p1/test_p0).detach().cpu().numpy().flatten()
     for feature, params in features_config.items():
         kinematic_histogram(test_feats[noOnes, params['loc']].cpu().numpy(), params, epoch, lr, tlr[noOnes], 
-                            f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}.png')
+                            f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}.png', ylim=ylim)
+        kinematic_histogram(test_feats[noOnes, params['loc']].cpu().numpy(), params, epoch, lr, tlr[noOnes], 
+                            f'{config["name"]}/complete/kinematics/{feature}.png', ylim=ylim, epoch_title=False)
         plots = sorted(glob.glob(f'{config["name"]}/incomplete/kinematics/{feature}/*.png'))
         animate_plots(plots, f'{config["name"]}/complete/animations/{feature}.gif')
     return config

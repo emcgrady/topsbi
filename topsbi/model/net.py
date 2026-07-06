@@ -83,7 +83,7 @@ class Model:
         """
         if self.method == 'alice': 
             truth       = w1/(w0 + w1)
-            cost.weight = 2*torch.ones(truth.shape[0], device=self.device)
+            cost.weight = w0 + w1
         else: 
             truth       = torch.cat([torch.zeros(w0.shape[0], device=self.device), 
                                      torch.ones(w1.shape[0], device=self.device)])

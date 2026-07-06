@@ -41,7 +41,7 @@ def animate_plots(plots, outname, fps=5):
     plt.close(fig)
 
 
-def kinematic_histogram(x, params, epoch, learned_lr, true_lr, outname):
+def kinematic_histogram(x, params, epoch, learned_lr, true_lr, outname, ylim=None, epoch_title=True):
     '''
     Histogram of learned and true likelihood ratio as a function of a kinematic variable.
 
@@ -80,10 +80,11 @@ def kinematic_histogram(x, params, epoch, learned_lr, true_lr, outname):
     grid = fig.add_gridspec(2, 1, hspace=0.05, height_ratios=[5, 1])
     ax  += [fig.add_subplot(grid[0])]
     ax  += [fig.add_subplot(grid[1], sharex=ax[0])]
-    fig.suptitle(f'Epoch {epoch:04d}')
+    if epoch_title:
+        fig.suptitle(f'Epoch {epoch:04d}')
     
-    learned.plot1d(ax=ax[0], label=r'$\hat{r}\,(x;\theta_1,\theta_0)$')
-    correct.plot1d(ax=ax[0], linestyle='dashed', label=r'$r\,(x,z;\theta_1,\theta_0)$')
+    correct.plot1d(ax=ax[0], label=r'$r\,(x,z;\theta_1,\theta_0)$')
+    learned.plot1d(ax=ax[0], linestyle='dashdot', label=r'$\hat{r}\,(x;\theta_1,\theta_0)$')
 
     n_learned, bins = learned.to_numpy()
     n_correct, _    = correct.to_numpy()
@@ -101,8 +102,8 @@ def kinematic_histogram(x, params, epoch, learned_lr, true_lr, outname):
     lErr = np.sqrt(lErr)
     cErr = np.sqrt(cErr)
 
-    ax[0].errorbar((bins[:-1] + bins[1:])/2, n_learned, yerr=lErr,ecolor='C0', fmt='none')
-    ax[0].errorbar((bins[:-1] + bins[1:])/2, n_correct, yerr=cErr,ecolor='C1', fmt='none')  
+    ax[0].errorbar((bins[:-1] + bins[1:])/2, n_learned, yerr=lErr,ecolor='C1', fmt='none')
+    ax[0].errorbar((bins[:-1] + bins[1:])/2, n_correct, yerr=cErr,ecolor='C0', fmt='none')  
 
 
     ratio = np.divide(n_learned, n_correct, where=(n_correct > 0))
@@ -115,10 +116,15 @@ def kinematic_histogram(x, params, epoch, learned_lr, true_lr, outname):
     ax[1].set_ylim(0,2)
     ax[1].set_xlabel(params['label'])
     ax[0].legend()
-    fig.savefig(outname)
-    plt.close(fig)
-
-    return 
+    if ylim is None:
+        ylim = ax[0].get_ylim()
+        fig.savefig(outname)
+        plt.close(fig)
+        return ylim
+    else:
+        ax[0].set_ylim(ylim)
+        fig.savefig(outname)
+        plt.close(fig)
 
 def kinematicRatioPlot(
     x: np.array, 
@@ -605,6 +611,6 @@ def hist2d(
     ax.set_ylim(amin, amax)
     ax.plot([0, 1], [0, 1], color = 'grey', linestyle = "--", transform = ax.transAxes, label = '_nolegend_', linewidth=3)
     mh.cms.label("Preliminary", data=False, lumi=137.64, com=13, ax=ax)
-    ax.set_xlabel(r'Learned $\log[\hat{r}(x;\theta_1,\theta_0)]$')
+    ax.set_xlabel(r'$\log[\hat{r}(x;\theta_1,\theta_0)]$')
     ax.set_ylabel(r'$\log[r(x,z:\theta_1,\theta_0)]$')
     return h
