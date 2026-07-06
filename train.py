@@ -43,13 +43,47 @@ def main(config):
     model     = Model(nFeatures=train_feats.shape[1], method=config['method'], 
                       device=config['device'], config=config['network'], seed=config['seed'])
     optimizer = torch.optim.Adam(model.net.parameters(), lr=config['learningRate'])
+
+    scheduler_type = config.get('scheduler', 'plateau')
+    if scheduler_type == 'plateau':
+        # ReduceLROnPlateau: steps LR down when val BCE stops improving.
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min',
+            factor=config.get('factor', 0.5),
+            patience=config.get('lr_patience', 5),
+        )
+        print(f"[INFO] scheduler: ReduceLROnPlateau  factor={config.get('factor', 0.5)}  lr_patience={config.get('lr_patience', 5)}")
+    elif scheduler_type == 'cosine':
+        # Linear warmup → CosineAnnealingLR: smooth, deterministic
+        warmup = config.get('warmup_epochs', 5)
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[
+                torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup),
+                torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, config['epochs'] - warmup), eta_min=1e-6),
+            ],
+            milestones=[warmup],
+        )
+        print(f"[INFO] scheduler: cosine+warmup  warmup_epochs={warmup}  T_max={max(1, config['epochs'] - warmup)}")
+    else:
+        scheduler = None
+        print("[INFO] scheduler: none")
+
     trainLoss = [model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item()]
     testLoss  = [model.loss(norm_test, test_p0, test_p1).item()]
+    lrHistory = [optimizer.param_groups[0]['lr']]
 
     os.makedirs(f'{config["name"]}/complete/animations', exist_ok=True)
     os.makedirs(f'{config["name"]}/complete/kinematics', exist_ok=True)
     for feature in features_config.keys():
         os.makedirs(f'{config["name"]}/incomplete/kinematics/{feature}', exist_ok=True)
+
+    # early stopping parameters
+    patience      = config.get('patience', 10)
+    best_test_loss = float('inf')
+    best_epoch     = 0
+    patience_count = 0
+    best_state     = None
 
     for epoch in tqdm.tqdm(range(config['epochs'])):
         s  = model.net(norm_test).cpu().detach().numpy().flatten()
@@ -65,16 +99,39 @@ def main(config):
                 kinematic_histogram(test_feats[noOnes, params['loc']].cpu().numpy(), params, epoch, lr, tlr[noOnes], 
                                     f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}.png', ylim=ylim)
         trainLoss.append(model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item())
+        lrHistory.append(optimizer.param_groups[0]['lr'])
         if epoch%50 == 0:
             networkPlots(norm_test, test_p0, test_p1, model.net, trainLoss, 
-                         testLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}')
+                         testLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}', lr_history=lrHistory)
         for train_feats, train_p0, train_p1 in batches:
             optimizer.zero_grad()
             loss = model.loss(train_feats, train_p0, train_p1)
             loss.backward()
             optimizer.step()
-        testLoss.append(model.loss(norm_test, test_p0, test_p1).item())
-    networkPlots(norm_test, test_p0, test_p1, model.net, trainLoss, testLoss, f'{config["name"]}/complete')
+        current_test_loss = model.loss(norm_test, test_p0, test_p1).item()
+        testLoss.append(current_test_loss)
+
+        # ── early stopping ──
+        if current_test_loss < best_test_loss:
+            best_test_loss = current_test_loss
+            best_epoch     = epoch
+            best_state     = {k: v.clone() for k, v in model.net.state_dict().items()}
+            patience_count = 0
+        else:
+            patience_count += 1
+            if patience_count >= patience:
+                print(f"[INFO] early stopping at epoch {epoch}, best epoch was {best_epoch} (test loss {best_test_loss:.4f})")
+                break
+
+        if scheduler is not None:
+            if scheduler_type == 'plateau':
+                scheduler.step(current_test_loss)
+            else:
+                scheduler.step()
+
+    # NOTE: plots below reflect weights at the epoch training stopped on,
+    # which may differ from the best checkpoint saved to model.pt below.
+    networkPlots(norm_test, test_p0, test_p1, model.net, trainLoss, testLoss, f'{config["name"]}/complete', lr_history=lrHistory)
     s  = model.net(norm_test).cpu().detach().numpy().flatten()
     noOnes = s != 1
     s = s[noOnes]
@@ -87,7 +144,16 @@ def main(config):
                             f'{config["name"]}/complete/kinematics/{feature}.png', ylim=ylim, epoch_title=False)
         plots = sorted(glob.glob(f'{config["name"]}/incomplete/kinematics/{feature}/*.png'))
         animate_plots(plots, f'{config["name"]}/complete/animations/{feature}.gif')
+
+    if best_state is not None:
+        model.net.load_state_dict(best_state)
+        print(f"[INFO] restored best checkpoint from epoch {best_epoch}")
+
+    # keep the best model for validation
+    torch.save(model.net.state_dict(), f'{config["name"]}/model.pt')
+
     return config
+
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('config', help = 'configuration yml file used for training')
