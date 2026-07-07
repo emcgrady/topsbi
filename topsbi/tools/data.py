@@ -61,18 +61,18 @@ def get_probabilities(
         coefs: torch tensor whose rows represent each event and whose columns are the structure constants for the expanded quadratic
         config: dictionary containing lists of WC values at c0 and c1 
     Returns:
-        p0: event probability under c0
-        p1: event probability under c1
+        p0: event probability ratio under c0 and normalized by the mean
+        p1: event probability ratio under c1 and normalized by the mean
     """
     p0  = coefs@expand_array(config['c0'])
     p1  = coefs@expand_array(config['c1'])
-    p0 /= p0.sum()
-    p1 /= p1.sum()
+    p0 /= p0.mean()
+    p1 /= p1.mean()
 
     if ('cr' in config.keys()) and (config['cr'] is not None):
         print(f'Reference hypothesis set. Calculating likelihood ratio with respect to \n    {config["cr"]}')
         pr  = coefs@expand_array(config['cr'])
-        pr /= pr.sum()
+        pr /= pr.mean()
         p0 /= pr
         p1 /= pr
     return p0, p1
