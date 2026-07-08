@@ -1,0 +1,150 @@
+djdeta:
+  label: $\Delta\eta(j_0j_1)$
+  loc: 13
+  max: 5
+  min: 0
+  nbins: 30
+djdphi:
+  label: $\Delta\phi(j_0j_1)$
+  loc: 12
+  max: 3.15
+  min: -3.15
+  nbins: 30
+djmass:
+  label: $M(j_0j_1)$
+  loc: 11
+  max: 5600
+  min: 0
+  nbins: 30
+djpt:
+  label: $p_T(j_0j_1)$
+  loc: 10
+  max: 3750
+  min: 0
+  nbins: 30
+dldeta:
+  label: $\Delta\eta(\ell^+\ell^-$
+  loc: 7
+  max: 5
+  min: 0
+  nbins: 30
+dldjmass:
+  label: $M(\ell^+\ell^- j_0j_1)$
+  loc: 22
+  max: 7100
+  min: 0
+  nbins: 30
+dldphi:
+  label: $\Delta\phi(\ell^+\ell^-)$
+  loc: 6
+  max: 3.15
+  min: -3.15
+  nbins: 30
+dlmass:
+  label: $M(\ell^+\ell^-)$
+  loc: 5
+  max: 5500
+  min: 0
+  nbins: 30
+dlpt:
+  label: $p_T(\ell^+\ell^-)$
+  loc: 4
+  max: 3000
+  min: 0
+  nbins: 30
+ljlnldeta:
+  label: $\Delta\eta(j\ell^-)$
+  loc: 17
+  max: 5
+  min: 0
+  nbins: 30
+ljlnldphi:
+  label: $\Delta\phi(j\ell^-)$
+  loc: 16
+  max: 3.15
+  min: -3.15
+  nbins: 30
+ljlpldeta:
+  label: $\Delta\eta(j\ell^+)$
+  loc: 15
+  max: 5
+  min: 0
+  nbins: 30
+ljlpldphi:
+  label: $\Delta\phi(j\ell^+)$
+  loc: 14
+  max: 3.15
+  min: -3.15
+  nbins: 30
+ljopt:
+  label: "$p_T(\u2113,j)_{\\text{max}}$"
+  loc: 24
+  max: 3600
+  min: 0
+  nbins: 30
+ljpt:
+  label: $p_T(j_0)$
+  loc: 8
+  max: 3500
+  min: 0
+  nbins: 30
+llpt:
+  label: $p_T(\ell_0)$
+  loc: 0
+  max: 3000
+  min: 0
+  nbins: 30
+njets:
+  label: $N_{jet}$
+  loc: 23
+  max: 13.5
+  min: 1.5
+  nbins: 13
+nlpt:
+  label: $p_T(\ell^-)$
+  loc: 3
+  max: 3000
+  min: 0
+  nbins: 30
+plpt:
+  label: $p_T(\ell^+)$
+  loc: 2
+  max: 3000
+  min: 0
+  nbins: 30
+sjlnldeta:
+  label: $\Delta\eta(j_1l^-)$
+  loc: 21
+  max: 5
+  min: 0
+  nbins: 30
+sjlnldphi:
+  label: $\Delta\phi(j_1l^-)$
+  loc: 20
+  max: 3.15
+  min: -3.15
+  nbins: 30
+sjlpldeta:
+  label: $\Delta\eta(j_1l^+)$
+  loc: 19
+  max: 5
+  min: 0
+  nbins: 30
+sjlpldphi:
+  label: $\Delta\phi(j_1l^+)$
+  loc: 18
+  max: 3.15
+  min: -3.15
+  nbins: 30
+sjpt:
+  label: $p_T(j_1)$
+  loc: 9
+  max: 2000
+  min: 0
+  nbins: 30
+slpt:
+  label: $p_T(\ell_1)$
+  loc: 1
+  max: 3000
+  min: 0
+  nbins: 30
