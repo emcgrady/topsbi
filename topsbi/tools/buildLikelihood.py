@@ -20,6 +20,8 @@ class likelihood:
             network = self.config['network']
         else:
             network = None
+        with open(f'{self.config["name"]}/complete/performance.yml') as f:
+            self.performance = yaml.safe_load(f)
         self.model = Net(nFeatures, self.config['device'], network)
         self.model.load_state_dict(torch.load(f'{self.config["name"]}/complete/networkStateDict.p', 
                                               map_location=torch.device(self.config['device'])))   
@@ -39,7 +41,7 @@ class likelihood:
         lr  = (s/(1-s)).flatten()
         return lr
 
-class fullLikelihood: 
+class full_likelihood: 
     def __init__(
         self, 
         config: dict, 
@@ -65,7 +67,7 @@ class fullLikelihood:
                 self.ratios += [torch.ones(features.shape[0])]
             else:
                 self.ratios += [network(features)]
-        self.trainingMatrix = vstack(self.trainingMatrix)
+        self.trainingMatrix = torch.vstack(self.trainingMatrix)
         self.zerosMask = ~(self.trainingMatrix == 0).all(dim=0)
         self.trainingMatrix = self.trainingMatrix[:,self.zerosMask]
         self.ratios = torch.vstack(self.ratios)
