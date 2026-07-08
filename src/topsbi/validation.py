@@ -1,105 +1,111 @@
-from argparse import ArgumentParser
-from numpy import linspace, median
-from os import makedirs
-from pickle import load
-from tools.buildLikelihood import fullLikelihood, likelihood
-from tools.plots import histPlot, ratioPlot
-from tools.metrics import netEval
-from torch import mean
-from yaml import dump, safe_load
+from topsbi.tools.buildLikelihood import full_likelihood, likelihood
+from topsbi.tools.data import expand_array, get_probabilities
+from topsbi.tools.plots import hist2d, kinematic_ratio_plot, lrMeanPlot
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+import argparse, os, torch, yaml
+
+
+torch.set_num_threads(4)
 
 def main(parametric, dedicated, output):
-    makedirs(output, mode=0o755, exist_ok=True)
     with open(parametric, 'r') as f:
-        config = safe_load(f)
+        config = yaml.safe_load(f)
+    with open(config['features'], 'r') as f:
+        config['features'] = yaml.safe_load(f)
 
-    dlr  = likelihood(dedicated, len(config['features']))
-    dWcs = dlr.config['signalTrainingPoint']
-    wcDict = {}
-    for i, wc in enumerate(dlr.config['wcs']):
-        wcDict[wc] = dWcs[i+1]
-
-    with open(dlr.config['data'], 'rb') as f:
-        data = load(f)
-    features, fitCoefs, truth  = data[:]
-    features = (features*data.stdvs+data.means).detach().numpy()
-    fitCoefs = fitCoefs.detach().numpy()
-    truth    = truth.detach().numpy()
-
-    plr = fullLikelihood(config, data)
-    dlr = dlr(data, dWcs)
-    plr = plr(dWcs)
-
-    plr[plr < 0] = 0
-    dlr[dlr < 0] = 0
+    features, coefficients = torch.load(config['data'], weights_only=False)[:]
     
-    residuals = abs((dlr - plr)/dlr)
-    
-    metrics = {
-        'all': {
-            'residualMean':   float(residuals.mean()),
-            'residualMin':    float(residuals.min()),
-            'residualMax':    float(residuals.max()),
-            'residualMedian': float(median(residuals)),
-            'residualStdv':   float(residuals.std())
-        },
-        'background': {
-            'residualMean':   float(residuals[truth == 0].mean()),
-            'residualMin':    float(residuals[truth == 0].min()),
-            'residualMax':    float(residuals[truth == 0].max()),
-            'residualMedian': float(median(residuals[truth == 0])),
-            'residualStdv':   float(residuals[truth == 0].std())
-        },
-        'signal': {
-            'residualMean':   float(residuals[truth == 1].mean()),
-            'residualMin':    float(residuals[truth == 1].min()),
-            'residualMax':    float(residuals[truth == 1].max()),
-            'residualMedian': float(median(residuals[truth == 1])),
-            'residualStdv':   float(residuals[truth == 1].std())
-        },
-    }
+    plr          = full_likelihood(config, features)
+    features     = features[plr.infFilter]
+    coefficients = coefficients[plr.infFilter]
+    dlr          = likelihood(dedicated, features.shape[1])
+    c1           = dlr.config['c1']
+    c0           = dlr.config['c0']
+    wcs          = dlr.config['wcs']
+    p0, p1       = get_probabilities(coefficients, dlr.config)
 
-    makedirs(f'{output}/likelihood', mode=0o755, exist_ok=True)
-    
-    histPlot(plr[truth == 0], plr[truth == 1], 'Parametric Likelihood Ratio',
-             outname=f'{output}/likelihood/parametricLR', ylog=True)
-    histPlot(dlr[truth == 0], dlr[truth == 1], 'Dedicated Likelihood Ratio',  
-             outname=f'{output}/likelihood/dedicatedLR', ylog=True)
-    histPlot(residuals[truth == 0], residuals[truth == 1], 'Residuals',
-              outname=f'{output}/likelihood/residuals', ylog=True)
-    histPlot(plr[truth == 0], plr[truth == 1], 'Parametric Likelihood Ratio',   
-             outname=f'{output}/likelihood/Log_parametricLR', ylog=True, xlog=True)
-    histPlot(dlr[truth == 0], dlr[truth == 1], 'Dedicated Likelihood Ratio', 
-             outname=f'{output}/likelihood/Log_dedicatedLR', ylog=True, xlog=True)
-    histPlot(residuals[truth == 0], residuals[truth == 1], 'Residuals',
-              outname=f'{output}/likelihood/Log_residuals', ylog=True, xlog=True)
+    # create title of dedicated point in WC space
+    title = ''
+    counter = 0
+    for i, value in enumerate(c1[1:]):
+        if value != 0:
+            title += f'{wcs[i]}={value:.2f} '
+            counter += 1
+            if counter%6 == 0:
+                title += '\n'
 
-    makedirs(f'{output}/kinematics/noNorm',  mode=0o755, exist_ok=True)
-    makedirs(f'{output}/kinematics/density', mode=0o755, exist_ok=True)
-    
+    os.makedirs(f'{output}/kinematics/linear', mode=0o755, exist_ok=True)
+    os.makedirs(f'{output}/kinematics/log', mode=0o755, exist_ok=True)
+
     for kinematic, params in config['features'].items():
-        bins = linspace(params['min'], params['max'], params['nbins'])
-        ratioPlot(features[:,params['loc']], dlr, plr, fitCoefs, bins, wcDict, 
-                  outname=f'{output}/kinematics/noNorm/{kinematic}.png', 
-                  xlabel=params['label'])
-        ratioPlot(features[:,params['loc']], dlr, plr, fitCoefs, bins, wcDict, 
-                  outname=f'{output}/kinematics/noNorm/Log_{kinematic}.png', 
-                  xlabel=params['label'], plotLog=True)
-        ratioPlot(features[:,params['loc']], dlr, plr, fitCoefs, bins, wcDict, 
-                  outname=f'{output}/kinematics/density/{kinematic}.png', 
-                  xlabel=params['label'], showNoWeights=True, density=True)
-        ratioPlot(features[:,params['loc']], dlr, plr, fitCoefs, bins, wcDict, 
-                  outname=f'{output}/kinematics/density/Log_{kinematic}.png', 
-                  xlabel=params['label'], showNoWeights=True, density=True, plotLog=True)
+        params['c1']     = c1
+        params['c0'] = c0
+        params['title']   = title
+        params['wcs']     = wcs
+        params['plotLog'] = False
+        params['outname'] = f'{output}/kinematics/linear/{kinematic}.png'
+        kinematic_ratio_plot(features[:, params['loc']], dlr, plr, coefficients, **params)
+        params['plotLog'] = True
+        params['outname'] = f'{output}/kinematics/log/{kinematic}.png'
+        kinematic_ratio_plot(features[:, params['loc']], dlr, plr, coefficients, **params)
 
-    with open(f'{output}/likelihood/metrics.yml', 'w') as f:
-        f.write(dump(metrics))
+    performance = {}
+    #check binned LR
+    fig, ax = plt.subplots()
+    lrMeanPlot(ax, dlr, p1/p0, p0, 50, 0.01)
+    lrMeanPlot(ax, plr, p1/p0, p0, 50, 0.01)
+    ax.legend(['Dedicated', 'Parametric'])
+    fig.savefig(f'{output}/lrExcl_lobin.png')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    fig.savefig(f'{output}/lrExclLog_lobin.png')
+    fig.clf()
+    fig.close()
+
+    fig, ax = plt.subplots()
+    performance['dChiExcl'] = lrMeanPlot(ax, dlr, p1/p0, p0, 1000, 0.01)
+    performance['pChiExcl'] = lrMeanPlot(ax, plr, p1/p0, p0, 1000, 0.01)
+    ax.legend(['Dedicated', 'Parametric'])
+    fig.savefig(f'{output}/lrExcl.png')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    fig.savefig(f'{output}/lrExclLog.png')
+    fig.clf()
+    fig.close()
+
+    fig, ax = plt.subplots()
+    lrMeanPlot(ax, dlr, p1/p0, p0, 50, 0)
+    lrMeanPlot(ax, plr, p1/p0, p0, 50, 0)
+    ax.legend(['Dedicated', 'Parametric'])
+    fig.savefig(f'{output}/lrIncl_lobin.png')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    fig.savefig(f'{output}/lrInclLog_lobin.png')
+    fig.clf()
+    fig.close()
+
+    fig, ax = plt.subplots()
+    performance['dChiIncl'] = lrMeanPlot(ax, dlr, p1/p0, p0, 1000, 0)
+    performance['pChiIncl'] = lrMeanPlot(ax, plr, p1/p0, p0, 1000, 0)
+    ax.legend(['Dedicated', 'Parametric'])
+    fig.savefig(f'{output}/lrIncl.png')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    fig.savefig(f'{output}/lrInclLog.png')
+    fig.clf()
+    fig.close()
+    
+    with open(f'{output}/performace.yml', 'w') as f:
+        f.write(yaml.dump(performance))
 
 if __name__=="__main__":
-    parser = ArgumentParser()
+    parser = argparse.ArgumentParser()
     parser.add_argument('--parametric', '-p' , help = 'configuration yml file used for parametric likelihood')
     parser.add_argument('--dedicated', '-d' , help = 'configuration yml file used for dedicated likelihood')
     parser.add_argument('--output', '-o' , help = 'location to save output plots')
 
     args = parser.parse_args()
-    main(args.parametric, args.dedicated, args.output, args.validation_set, args.network)
+    main(args.parametric, args.dedicated, args.output)

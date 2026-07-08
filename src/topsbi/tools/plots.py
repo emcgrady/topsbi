@@ -1,5 +1,3 @@
-from hist import Hist
-from hist.axis import Regular, StrCategory
 from matplotlib.axes import Axes
 from matplotlib.ticker import StrMethodFormatter
 from matplotlib.animation import FuncAnimation, PillowWriter
@@ -126,11 +124,11 @@ def kinematic_histogram(x, params, epoch, learned_lr, true_lr, outname, ylim=Non
         fig.savefig(outname)
         plt.close(fig)
 
-def kinematicRatioPlot(
+def kinematic_ratio_plot(
     x: np.array, 
     dlr: np.array, 
     plr: np.array, 
-    fitCoefs: list[float], 
+    coefficients: list[float], 
     **params
 ):
     """
@@ -145,6 +143,7 @@ def kinematicRatioPlot(
         params: dictionary containing plotting information
     """
     #initialize the figure
+    mh.style.use("CMS")
     ax   = []
     fig  = plt.figure()
     grid = fig.add_gridspec(2, 1, hspace=0.05, height_ratios=[5, 1])
@@ -154,65 +153,71 @@ def kinematicRatioPlot(
     plt.setp(ax[0].get_xticklabels(), visible=False)
 
     #initialize the histograms
-    correct = HistEFT(StrCategory([], name   = 'process', growth = True),
-                      Regular(name ='correct',
-                              label=params['label'],
-                              bins=params['nbins'] - 1,
-                              start=params['min'],
-                              stop=params['max']
-                              ),
-                      wc_names = params['wcs'],
-                      label = 'Events'
-                      )
-    dedicated  = Hist(Regular(name='dedicated',
-                              label=params['label'],
-                              bins=params['nbins'] - 1,
-                              start=params['min'],
-                               stop=params['max']
-                              )
-                      )
-    parametric = Hist(Regular(name='parametric',
-                              label=params['label'],
-                              bins=params['nbins'] - 1,
-                              start=params['min'],
-                              stop=params['max']
-                              )
-                      )
+    correct_hist = HistEFT(
+        hist.axis.StrCategory([], name   = 'process', growth = True),
+        hist.axis.Regular(
+            name ='correct',
+            label=params['label'],
+            bins=params['nbins'],
+            start=params['min'],
+            stop=params['max']
+            ),
+            wc_names = params['wcs'],
+            label = 'Events'
+            )
+    dedicated_hist = hist.Hist(
+        hist.axis.Regular(
+            name='dedicated',
+            label=params['label'],
+            bins=params['nbins'],
+            start=params['min'],
+            stop=params['max']
+            )
+            )
+    parametric_hist = hist.Hist(
+        hist.axis.Regular(
+            name='parametric',
+            label=params['label'],
+            bins=params['nbins'],
+            start=params['min'],
+            stop=params['max']
+            )
+            )
     
     #convert the likelihood ratio to weights
-    bkg  = fitCoefs@expand_array(params['backgroundTrainingPoint']).detach().numpy()
-    sig  = fitCoefs@expand_array(params['signalTrainingPoint']).detach().numpy()
-    norm = sig.sum()/bkg.sum()*bkg/x.shape[0]
-    dedi = dlr*norm
-    para = plr*norm
-    
+    w0  = coefficients@expand_array(params['c0']).detach().cpu().numpy()
+    w1  = coefficients@expand_array(params['c1']).detach().cpu().numpy()
+    xsec_factor = w1.mean()/w0.sum()*w0
+    dlr *= xsec_factor
+    plr *= xsec_factor
+
     #fill the histograms
-    correct.fill(correct=x, eft_coeff=fitCoefs, process='process')
-    correct = correct.as_hist(params['signalTrainingPoint'][1:]).integrate('process')
-    dedicated.fill(dedicated=x, weight=dedi)
-    parametric.fill(parametric=x, weight=para)
+    correct_hist.fill(correct=x, eft_coeff=coefficients, process='process')
+    correct_hist = correct_hist.as_hist(params['c1'][1:]).integrate('process')
+    dedicated_hist.fill(dedicated=x, weight=dlr)
+    parametric_hist.fill(parametric=x, weight=plr)
 
     #calculate error
-    cNum, bins = correct.to_numpy()
-    dNum = dedicated.values()
-    pNum = parametric.values()
+    cNum, bins = correct_hist.to_numpy()
+    dNum = dedicated_hist.values()
+    pNum = parametric_hist.values()
     cErr = []
     dErr = []
     pErr = []
-    
+
     for i in range(params['nbins'] - 1):
-        cErr.append((sig[(x >= bins[i]) & (x < bins[i+1])]**2).sum())
-        dErr.append((dedi[(x >= bins[i]) & (x < bins[i+1])]**2).sum())
-        pErr.append((para[(x >= bins[i]) & (x < bins[i+1])]**2).sum())
+        cErr.append((w1[(x >= bins[i]) & (x < bins[i+1])]**2).sum())
+        dErr.append((dlr[(x >= bins[i]) & (x < bins[i+1])]**2).sum())
+        pErr.append((plr[(x >= bins[i]) & (x < bins[i+1])]**2).sum())
     cErr = np.sqrt(np.hstack(cErr))
     dErr = np.sqrt(np.hstack(dErr))
     pErr = np.sqrt(np.hstack(pErr))
-    
+
     #plot the histograms
-    correct.plot1d(ax=ax[0], yerr=cErr, label='Correct')
-    dedicated.plot1d(ax=ax[0],  yerr=dErr, label='Dedicated',  linestyle='dashdot', color='orange')
-    parametric.plot1d(ax=ax[0], yerr=pErr, label='Parametric', linestyle='dashed',  color='green')
-    
+    correct_hist.plot1d(ax=ax[0], yerr=cErr, label='Correct')
+    dedicated_hist.plot1d(ax=ax[0],  yerr=dErr, label='Dedicated',  linestyle='dashdot', color='orange')
+    parametric_hist.plot1d(ax=ax[0], yerr=pErr, label='Parametric', linestyle='dashed',  color='green')
+
     #plot the ratio and ratio errors
     ax[1].hlines(1, bins[0], bins[-1], color='k', linestyle='dashed')
     rBins = np.diff(bins)/2+bins[:-1]

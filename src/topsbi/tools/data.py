@@ -1,5 +1,4 @@
 from numpy.random import poisson
-from torch.utils.data import DataLoader, TensorDataset
 
 import torch, tqdm
 
@@ -122,7 +121,7 @@ def toy_builder(
         print(f'Using M={M:.2f}')
     threshold = tar_prob/(M*can_prob)
     indices   = torch.tensor(range(0, can_prob.shape[0]))
-    batches   = DataLoader(TensorDataset(threshold, indices), batch_size=1_000, shuffle=True, num_workers=n_workers)
+    batches   = torch.DataLoader(torch.TensorDataset(threshold, indices), batch_size=1_000, shuffle=True, num_workers=n_workers)
     event_mask = []
     print('Rejection sampler prepared')
     enough    = False

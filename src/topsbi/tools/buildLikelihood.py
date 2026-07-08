@@ -72,7 +72,7 @@ class full_likelihood:
         self.trainingMatrix = self.trainingMatrix[:,self.zerosMask]
         self.ratios = torch.vstack(self.ratios)
         self.infFilter = ~torch.isinf(self.ratios).any(0)
-        self.alphas, self.residuals, self.rank, self.singular_values = torch.linalg.lstsq(self.trainingMatrix, self.ratios[:,self.infFilter], rcond=-1)
+        self.gammas, self.residuals, self.rank, self.singular_values = torch.linalg.lstsq(self.trainingMatrix, self.ratios[:,self.infFilter], rcond=-1)
     def __call__(self, coefs): 
         """
         Evaluates the ensembled likelihood ratio for a given point in WC space. 
