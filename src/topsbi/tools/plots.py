@@ -128,7 +128,7 @@ def kinematic_ratio_plot(
     x: np.array, 
     dlr: np.array, 
     plr: np.array, 
-    coefficients: list[float], 
+    true_lr: np.array, 
     **params
 ):
     """
@@ -153,23 +153,20 @@ def kinematic_ratio_plot(
     plt.setp(ax[0].get_xticklabels(), visible=False)
 
     #initialize the histograms
-    correct_hist = HistEFT(
-        hist.axis.StrCategory([], name   = 'process', growth = True),
+    correct_hist = hist.Hist(
         hist.axis.Regular(
-            name ='correct',
+            name='correct',
             label=params['label'],
-            bins=params['nbins'],
+            bins=params['nbins'] - 1,
             start=params['min'],
             stop=params['max']
-            ),
-            wc_names = params['wcs'],
-            label = 'Events'
+            )
             )
     dedicated_hist = hist.Hist(
         hist.axis.Regular(
             name='dedicated',
             label=params['label'],
-            bins=params['nbins'],
+            bins=params['nbins'] - 1,
             start=params['min'],
             stop=params['max']
             )
@@ -178,22 +175,13 @@ def kinematic_ratio_plot(
         hist.axis.Regular(
             name='parametric',
             label=params['label'],
-            bins=params['nbins'],
+            bins=params['nbins'] - 1,
             start=params['min'],
             stop=params['max']
             )
             )
-    
-    #convert the likelihood ratio to weights
-    w0  = coefficients@expand_array(params['c0']).detach().cpu().numpy()
-    w1  = coefficients@expand_array(params['c1']).detach().cpu().numpy()
-    xsec_factor = w1.mean()/w0.sum()*w0
-    dlr *= xsec_factor
-    plr *= xsec_factor
 
-    #fill the histograms
-    correct_hist.fill(correct=x, eft_coeff=coefficients, process='process')
-    correct_hist = correct_hist.as_hist(params['c1'][1:]).integrate('process')
+    correct_hist.fill(correct=x, weight=true_lr)
     dedicated_hist.fill(dedicated=x, weight=dlr)
     parametric_hist.fill(parametric=x, weight=plr)
 
@@ -206,7 +194,7 @@ def kinematic_ratio_plot(
     pErr = []
 
     for i in range(params['nbins'] - 1):
-        cErr.append((w1[(x >= bins[i]) & (x < bins[i+1])]**2).sum())
+        cErr.append((true_lr[(x >= bins[i]) & (x < bins[i+1])]**2).sum())
         dErr.append((dlr[(x >= bins[i]) & (x < bins[i+1])]**2).sum())
         pErr.append((plr[(x >= bins[i]) & (x < bins[i+1])]**2).sum())
     cErr = np.sqrt(np.hstack(cErr))
@@ -214,7 +202,7 @@ def kinematic_ratio_plot(
     pErr = np.sqrt(np.hstack(pErr))
 
     #plot the histograms
-    correct_hist.plot1d(ax=ax[0], yerr=cErr, label='Correct')
+    correct_hist.plot1d(ax=ax[0], yerr=cErr, label=f'Correct ({params["wc_point"]})')
     dedicated_hist.plot1d(ax=ax[0],  yerr=dErr, label='Dedicated',  linestyle='dashdot', color='orange')
     parametric_hist.plot1d(ax=ax[0], yerr=pErr, label='Parametric', linestyle='dashed',  color='green')
 
@@ -239,14 +227,13 @@ def kinematic_ratio_plot(
     ax[1].set_ylim([0,2])
     
     #clean up formatting
-    if params['title']:
-        ax[0].set_title(params['title'], fontsize=14)
+    mh.cms.label("Preliminary", data=False, lumi=137.64, com=13, ax=ax[0])
     if params['plotLog']:
         ax[0].set_yscale('log')
     ax[0].set_xlabel('') 
-    ax[0].set_ylabel('counts', fontsize=12)
-    ax[1].set_xlabel(params['label'], fontsize=12) 
-    ax[1].set_ylabel('ratio', fontsize=12)
+    ax[0].set_ylabel('counts')
+    ax[1].set_xlabel(params['label']) 
+    ax[1].set_ylabel('ratio')
     ax[0].set_xlim(params['min'], params['max'])
     ax[0].legend()
     if params['outname']:

@@ -82,4 +82,4 @@ class full_likelihood:
         Returns:
             evaluated likelihood ratio
         """
-        return expand_array(coefs)[self.zerosMask]@self.alphas
+        return expand_array(coefs)[self.zerosMask]@self.gammas
