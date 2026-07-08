@@ -8,21 +8,10 @@ Start by cloning the repository.
 git clone https://github.com/emcgrady/topsbi.git
 cd topsbi
 ```
-Then instal and activate the repository Conda/Mamba environment.
+Then install and activate the repository UV environment.
 ```sh
-mamba env create -f environment.yml
-mamba activate topsbi
-```
-Instal Conda for GPU use (Optional)
-Use the instructions found in the [PyTorch documentation](https://pytorch.org/get-started/locally/) for your OS and GPUs. For camlnd.crc.nd.edu, use the following command. 
-```sh
-pip3 install torch torchvision torchaudio
-```
-The validation framework uses [topcoffea](https://github.com/TopEFT/topcoffea) as a baseline to compare to when reweighting. In any directory, topcoffea can be installed by the following commands.
-```sh
-git clone https://github.com/TopEFT/topcoffea.git
-cd topcoffea
-pip install .
+uv sync
+source .venv/bin/activate
 ```
 ## Network Training
 All of the training is done through `train.py` which takes a single argument, a path to a configuration yaml. Examples of these yaml files can be found in the examples directory. As the fileds in these configuration files will be updated regulary as various features are added, a serpate README can be found in this directory.
