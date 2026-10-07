@@ -1,7 +1,7 @@
 import numpy as np
 import torch, tqdm
 
-def expand_array(
+def get_lower_tri(
     vec: list,
     dtype: type=torch.float32,
     off_diag: float=1.0,
@@ -40,7 +40,7 @@ def parameterize_weights(
         p1:  event probabilits under randomized c1 from config ranges
         wcs: random WC values used to calculate p1
     """
-    coefs /= (coefs@expand_array(config['cg'])).mean()
+    coefs /= (coefs@get_lower_tri(config['cg'])).mean()
     wcs = [torch.ones(coefs.shape[0])]
     #choose random WC values
     for wc in config['wcs']:
@@ -52,7 +52,7 @@ def parameterize_weights(
         for j in range(i+1):
             expanded_wcs += [wcs[i]*wcs[j]]
     sig  = (coefs*(torch.vstack(expanded_wcs).T)).sum(1)
-    bkg  = coefs@expand_array(config['c0'])
+    bkg  = coefs@get_lower_tri(config['c0'])
     
     return bkg/(bkg.mean()), sig/(sig.mean()), wcs.T
 
@@ -71,9 +71,9 @@ def get_weights(
         w1: event weight ratio under c1 
         wg: event weight ratio under cg
     """
-    pg  = coefs@expand_array(config['cg'])
-    p0  = (coefs@expand_array(config['c0']))/pg
-    p1  = (coefs@expand_array(config['c1']))/pg
+    pg  = coefs@get_lower_tri(config['cg'])
+    p0  = (coefs@get_lower_tri(config['c0']))/pg
+    p1  = (coefs@get_lower_tri(config['c1']))/pg
 
     return p0, p1, pg
 
@@ -91,9 +91,9 @@ def get_probabilities(
         p0: event probability ratio under c0 and normalized by the mean
         p1: event probability ratio under c1 and normalized by the mean
     """
-    pg  = coefs@expand_array(config['cg'])
-    p0  = coefs@expand_array(config['c0'])
-    p1  = coefs@expand_array(config['c1'])
+    pg  = coefs@get_lower_tri(config['cg'])
+    p0  = coefs@get_lower_tri(config['c0'])
+    p1  = coefs@get_lower_tri(config['c1'])
     pg /= pg.mean()
     p0 /= (p0.mean())*pg
     p1 /= (p1.mean())*pg

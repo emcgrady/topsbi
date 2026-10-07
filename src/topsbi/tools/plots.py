@@ -1,7 +1,6 @@
 from matplotlib.axes import Axes
 from matplotlib.ticker import StrMethodFormatter
 from matplotlib.animation import FuncAnimation, PillowWriter
-from topsbi.tools.buildLikelihood import expand_array
 from topsbi.tools.metrics import netEval
 from topcoffea.modules.histEFT import HistEFT
 
