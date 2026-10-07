@@ -1,4 +1,6 @@
+animate_per_epoch: 5
 batchSize: 1000
+bootstrap: true
 c0:
 - 1.0
 - 0.0
@@ -53,30 +55,23 @@ cg:
 - 1.5
 - 1.5
 - 1.5
-cr:
-- 1.0
-- 1.5
-- 1.5
-- 1.5
-- 1.5
-- 1.5
-- 1.5
-- -0.5
-- -0.5
-- 1.5
-- 1.5
-- 1.5
-- 1.5
-- 1.5
-- 1.5
-- 1.5
-- 1.5
 data: /groups/klannon/cmcgrad2/data/new_sample
 device: cpu
 epochs: 100
 learningRate: 0.0005
 scheduler: plateau   # 'plateau' (default) | 'cosine' | 'none'
 factor: 0.1        # ReduceLROnPlateau: multiplicative LR decay factor
+features: /groups/klannon/cmcgrad2/data/reco_regrouped/features.yml
+features_to_animate:
+- dbjmass
+- dbjpt
+- dldbjmass
+- dldeta
+- dldphi
+- dlmass
+- dlpt
+- ljopt
+learningRate: 0.0005
 lr_patience: 5     # ReduceLROnPlateau: epochs without improvement before LR step
 warmup_epochs: 5     # cosine only: linear-warmup length before cosine decay
 method: stitched
@@ -94,6 +89,7 @@ network:
   out: 1
   type: Linear
 patience: 10
+scheduler: plateau
 seed: 42
 wcs:
 - cQd1
