@@ -1,5 +1,5 @@
 from topsbi.model.net import Net
-from topsbi.tools.data import expand_array, prepare_features
+from topsbi.tools.data import get_lower_tri, prepare_features
 
 import torch, tqdm, yaml
 
@@ -66,13 +66,13 @@ class full_likelihood:
             sm_ratio = 1
         for i, yaml in tqdm.tqdm(enumerate(self.config['networks']), total=len(self.config['networks'])):
             network = likelihood(yaml, len(self.config['features']))
-            self.trainingMatrix += [expand_array(network.config['c1'])]
+            self.trainingMatrix += [get_lower_tri(network.config['c1'])]
             if network.config['c1'] == network.config['c0']:
                 self.ratios += [torch.ones(features.shape[0])]
             else:
                 temp_ratio = network(features)
                 self.ratios += [torch.divide(temp_ratio, sm_ratio)]
-        self.trainingMatrix += [expand_array([1] + [0] * len(self.wcs))]
+        self.trainingMatrix += [get_lower_tri([1] + [0] * len(self.wcs))]
         self.ratios += [torch.ones(self.ratios[0].shape)]
         self.trainingMatrix = torch.vstack(self.trainingMatrix)
         self.zerosMask = ~(self.trainingMatrix == 0).all(dim=0)
@@ -89,7 +89,7 @@ class full_likelihood:
         Returns:
             evaluated likelihood ratio
         """
-        return expand_array(coefs)[self.zerosMask]@self.gammas
+        return get_lower_tri(coefs)[self.zerosMask]@self.gammas
 
 class ensemble:
     def __init__(
@@ -123,7 +123,7 @@ class ensemble:
         self,
         coefs: list
     ):
-        return expand_array(coefs)[self.zeros_mask]@self.gammas
+        return get_lower_tri(coefs)[self.zeros_mask]@self.gammas
 
 def get_np_parameterization(features, config, up_training, down_training):
     up_model   = Net(features.shape[1], config['device'], config['network'])
