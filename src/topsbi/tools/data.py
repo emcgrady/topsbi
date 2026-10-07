@@ -2,23 +2,28 @@ import numpy as np
 import torch, tqdm
 
 def expand_array(
-    coefs: list,
+    vec: list,
+    dtype: type=torch.float32,
     off_diag: float=1.0,
 ):
     """
-    returns pytorch TensorDataset of a quadratic expansion a list of values (lower triangular matrix)
+    returns lower triangual matrix of outer product of vec
     Args:
-        coefs: list of WC values to expand
+        vec: vector to take the outer product of
         off_diag: factor to multiply off-diagonal elements by
     Returns:
-        single-precision torch tensor of expanded WC values 
+        lower triangular matrix
     """
-    array_out = []
-    for i in range(len(coefs)):
-         for j in range(i+1):
-            scale = 1.0 if j==i else scale = off_diag
-            array_out += [scale*coefs[i]*coefs[j]]
-    return torch.tensor(array_out).type(torch.float32)
+    if type(vec) != torch.tensor:
+        vec = torch.tensor(vec)
+    if vec.dtype != dtype:
+        vec = vec.to(dtype)
+    expanded_vec = torch.outer(vec, vec)
+    expanded_dim = expanded_vec.shape[0]
+    rows, cols = torch.tril_indices(expanded_dim, expanded_dim)
+    off_rows, off_cols = torch.tril_indices(expanded_dim, expanded_dim, offset=-1)
+    expanded_vec[off_rows, off_cols] *= off_diag
+    return expanded_vec[rows, cols]
     
 def parameterize_weights(
     coefs: torch.tensor,
