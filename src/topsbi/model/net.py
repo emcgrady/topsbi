@@ -1,7 +1,5 @@
 import torch
 
-cost =  torch.nn.BCELoss(reduction='mean')
-
 def createModel(nFeatures, config):
     """
     Build a network based on a given dictionary. 
@@ -69,7 +67,11 @@ class Model:
         self.net  = Net(nFeatures, device, config)
         self.device = device
         self.method = method
-        cost.to(device)
+        if (self.method == 'weight_shift') or (self.method == 'kinematic_shift'):
+            self.cost = torch.nn.SoftMarginLoss()
+        else:
+            self.cost = torch.nn.BCELoss()
+        self.cost.to(self.device)
         
     def loss(self, features, w0, w1):
         """
@@ -81,13 +83,42 @@ class Model:
         Returns:
             weighted loss 
         """
-        if self.method == 'alice': 
-            truth       = w1/(w0 + w1)
-            cost.weight = w0 + w1
+        if self.method == 'weight_shift':
+            truth    = torch.cat([torch.ones(w0.shape[0], device=self.device) * 0, 
+                                  torch.ones(w1.shape[0], device=self.device)])
+            features = torch.cat([features, features])
+            self.cost.weight = torch.cat([w0, w1])
+            netOut = self.net(features).squeeze() * 2 - 1
+            return self.cost(netOut, truth)
+        elif self.method == 'alice': 
+            truth = w1/(w0 + w1)
+            self.cost.weight = w0 + w1
+            netOut = self.net(features).squeeze()
+            return self.cost(netOut, truth)
         else: 
             truth       = torch.cat([torch.zeros(w0.shape[0], device=self.device), 
                                      torch.ones(w1.shape[0], device=self.device)])
             features    = torch.cat([features, features])
-            cost.weight = torch.cat([w0, w1])
-        netOut = self.net(features).squeeze()
-        return cost(netOut, truth)
+            self.cost.weight = torch.cat([w0, w1])
+            netOut = self.net(features).squeeze()
+            return self.cost(netOut, truth)
+    def two_distribution_loss(
+        self, 
+        features_0, 
+        weights_0,
+        features_1,
+        weights_1
+        ):
+        mask_0 = (features_0 != 0).all(1)
+        mask_1 = (features_1 != 0).all(1)
+        truth = torch.cat([
+            torch.ones(weights_0[mask_0].shape[0], device=self.device),
+            torch.ones(weights_1[mask_1].shape[0], device=self.device) * -1
+        ])
+        features = torch.cat([
+            features_0[mask_0], 
+            features_1[mask_1]
+        ])
+        self.cost.weight = torch.cat([weights_0[mask_0], weights_1[mask_1]])
+        net_out = self.net(features).squeeze()
+        return self.cost(net_out, truth)

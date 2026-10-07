@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 
 def netEval(netOut, bWeights, sWeights, threshold=0.5, nPoints=200):
     bins = np.linspace(netOut.min(), netOut.max(), nPoints + 1)
@@ -15,4 +14,4 @@ def netEval(netOut, bWeights, sWeights, threshold=0.5, nPoints=200):
     a = ((sWeights[netOut >= threshold].sum() + bWeights[netOut <= threshold].sum())/bTotal + sTotal).item()
     auc = np.trapezoid(tpr, x=fpr).item()
 
-    return fpr, tpr, auc, a
+    return fpr, tpr, auc

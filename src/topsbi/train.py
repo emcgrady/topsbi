@@ -1,45 +1,86 @@
 from topsbi.model.net import Model
 from topsbi.tools.plots import networkPlots, kinematic_histogram, animate_plots
-from topsbi.tools.data import parameterize_weights, get_probabilities
+from topsbi.tools.data import parameterize_weights, get_probabilities, get_weights, sample_boostrap, prepare_features
 
 import argparse, glob, os, tqdm, torch, yaml
+import numpy as np
 
 def main(config):
-    with open(f'{config["data"]}/features.yml', 'r') as f:
+    with open(config['features'], 'r') as f:
         features_config = yaml.safe_load(f)
     if config['device'] != 'cpu' and not torch.cuda.is_available():
         print("Warning, you tried to use cuda, but its not available. Will use the CPU")
         config['device'] = 'cpu'
     torch.manual_seed(config['seed'])
 
-    test_feats,   test_coefs  = torch.load(f'{config["data"]}/test.p', weights_only=False)[:]
-    train_feats,  train_coefs = torch.load(f'{config["data"]}/train.p', weights_only=False)[:]
-    
     if 'method' not in config.keys():
         config['method'] = 'stitched'
+
+    if config['bootstrap']:
+        train, test  = sample_boostrap(torch.load(f'{config["data"]}/train.p', weights_only=False), config['seed'])
+    
+    else: 
+        test_feats,   test_coefs  = torch.load(f'{config["data"]}/test.p', weights_only=False)[:]
+        train_feats,  train_coefs = torch.load(f'{config["data"]}/train.p', weights_only=False)[:]
     
     if config['method'] == 'parameterized':
+        train_feats, train_coefs = train[:]
+        test_feats,  test_coefs  = test[:]
         test_p0,  test_p1,  test_wcs  = parameterize_weights(test_coefs, config)
         train_p0, train_p1, train_wcs = parameterize_weights(train_coefs, config)
         test_feats  = torch.concatenate([test_feats,  test_wcs],  dim=1)
         train_feats = torch.concatenate([train_feats, train_wcs], dim=1)
     elif config['method'] == 'stitched':
-        test_p0,  test_p1  = get_probabilities(test_coefs, config)
-        train_p0, train_p1 = get_probabilities(train_coefs, config)
+        train_feats, train_coefs, _ = train[:]
+        # train_feats, train_coefs = train[:]
+        train = None
+        _ = None
+        train_p0, train_p1, train_pg = get_probabilities(train_coefs, config)
+        train_coefs = None
+        train_feats = prepare_features(train_feats)
+        test_feats,  test_coefs, _  = test[:]
+        # test_feats,  test_coefs  = test[:]
+        test = None
+        _ = None
+        test_p0,  test_p1,  test_pg  = get_probabilities(test_coefs, config)
+        test_coefs  = None
+        norm_test   = prepare_features(test_feats)
+        tlr = (test_p1/test_p0).detach().cpu().numpy().flatten()
+    elif config['method'] == 'weights_only':
+        train_feats, train_coefs, _ = train[:]
+        train_coefs = train_coefs.to(torch.float32)
+        train_feats = train_feats.to(torch.float32)
+        train = None
+        _ = None
+        train_p0, train_p1, train_pg = get_weights(train_coefs, config)
+        train_coefs = None
+        train_feats = prepare_features(train_feats)
+        test_feats,  test_coefs, _  = test[:]
+        test_coefs = test_coefs.to(torch.float32)
+        test_feats = test_feats.to(torch.float32)
+        test = None
+        _ = None
+        test_p0,  test_p1,  test_pg  = get_weights(test_coefs, config)
+        test_coefs  = None
+        norm_test   = prepare_features(test_feats)
+        tlr = (test_p1/test_p0).detach().cpu().numpy().flatten()
     elif config['method'] == 'alice':
+        train_feats, train_coefs = train[:]
+        test_feats,  test_coefs  = test[:]
         test_p0,  test_p1  = get_probabilities(test_coefs, config)
         train_p0, train_p1 = get_probabilities(train_coefs, config)
-
-    test_coefs  = None
-    train_coefs = None
-
-    train_means = train_feats.mean(0)
-    train_stds  = train_feats.std(0)
-    train_feats = (train_feats - train_means) / train_stds
-    norm_test   = (test_feats - train_means) / train_stds
+    elif config['method'] == 'weight_shift':
+        train_feats, train_p0, train_p1, train_pg, _ = train[:]
+        test_feats,  test_p0,  test_p1,  test_pg,  _ = test[:]
+        train_pg /= train_pg.mean()
+        train_p0 /= (train_p0.mean())*train_pg
+        train_p1 /= (train_p1.mean())*train_pg
+        test_pg  /= test_pg.mean()
+        test_p0  /= (test_p0.mean())*test_pg
+        test_p1  /= (test_p1.mean())*test_pg
 
     batches   = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(train_feats, train_p0, train_p1), 
-                                            batch_size=config['batchSize'], shuffle=True, num_workers=16)
+                                            batch_size=config['batchSize'], shuffle=True, num_workers=1)
     model     = Model(nFeatures=train_feats.shape[1], method=config['method'], 
                       device=config['device'], config=config['network'], seed=config['seed'])
     optimizer = torch.optim.Adam(model.net.parameters(), lr=config['learningRate'])
@@ -73,36 +114,65 @@ def main(config):
     testLoss  = [model.loss(norm_test, test_p0, test_p1).item()]
     lrHistory = [optimizer.param_groups[0]['lr']]
 
-    os.makedirs(f'{config["name"]}/complete/animations', exist_ok=True)
-    os.makedirs(f'{config["name"]}/complete/kinematics', exist_ok=True)
-    for feature in features_config.keys():
-        os.makedirs(f'{config["name"]}/incomplete/kinematics/{feature}', exist_ok=True)
+    if len(glob.glob(f'{config["name"]}/complete')) > 0:
+        os.system(f'rm -rf {config["name"]}/complete')
+    os.makedirs(f'{config["name"]}/complete/animations')
+    os.makedirs(f'{config["name"]}/complete/kinematics')
+    if len(glob.glob(f'{config["name"]}/incomplete')) > 0:
+        os.system(f'rm -rf {config["name"]}/incomplete')
+    for feature in config['features_to_animate']:
+        os.makedirs(f'{config["name"]}/incomplete/kinematics/{feature}')
 
     # early stopping parameters
-    patience      = config.get('patience', 10)
+    patience       = config.get('patience', 10)
     best_test_loss = float('inf')
     best_epoch     = 0
     patience_count = 0
     best_state     = None
 
     for epoch in tqdm.tqdm(range(config['epochs'])):
-        s  = model.net(norm_test).cpu().detach().numpy().flatten()
-        noOnes = s != 1
-        s = s[noOnes]
-        lr = s / (1 - s)
-        tlr = (test_p1/test_p0).detach().cpu().numpy().flatten()
-        for feature, params in features_config.items():
+        f  = model.net(norm_test).cpu().detach().numpy().flatten()
+        if config['method'] == 'weight_shift':
+            lr  = np.exp(2*f - 1)
+            noOnes = np.ones(tlr.shape, dtype=bool)
+        else:
+            noOnes = f != 1
+            f   = f[noOnes]
+            lr  = f / (1 - f)
+        for feature in config['features_to_animate']:
+            params = features_config[feature]
             if epoch == 0:
-                ylim = kinematic_histogram(test_feats[noOnes, params['loc']].cpu().numpy(), params, epoch, lr, tlr[noOnes], 
-                                           f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}.png')
-            else: 
-                kinematic_histogram(test_feats[noOnes, params['loc']].cpu().numpy(), params, epoch, lr, tlr[noOnes], 
-                                    f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}.png', ylim=ylim)
+                features_config[feature]['ylim_log'] = kinematic_histogram(
+                    test_feats[noOnes, params['loc']].cpu().numpy(), 
+                     params, epoch, lr, tlr[noOnes], 
+                    f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_log.png'
+                )
+                features_config[feature]['ylim_linear'] = kinematic_histogram(
+                    test_feats[noOnes, params['loc']].cpu().numpy(), 
+                     params, epoch, lr, tlr[noOnes], 
+                    f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_linear.png',
+                    log=False
+                )                                                      
+            elif epoch%config['animate_per_epoch'] == 0: 
+                kinematic_histogram(
+                    test_feats[noOnes, params['loc']].cpu().numpy(),
+                    params, epoch, lr, tlr[noOnes], 
+                    f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_log.png', 
+                    ylim=params['ylim_log']
+                )
+                kinematic_histogram(
+                    test_feats[noOnes, params['loc']].cpu().numpy(),
+                    params, epoch, lr, tlr[noOnes], 
+                    f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_linear.png', 
+                    ylim=params['ylim_linear'],
+                    log=False
+                )
+                                    
         trainLoss.append(model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item())
         lrHistory.append(optimizer.param_groups[0]['lr'])
         if epoch%50 == 0:
-            networkPlots(norm_test, test_p0, test_p1, model.net, trainLoss, 
-                         testLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}', lr_history=lrHistory)
+            networkPlots(norm_test, test_p0, test_p1, test_pg, model.net, trainLoss, 
+                         testLoss, f'{config["name"]}/incomplete/epoch_{epoch:04d}', method=config['method'], lr_history=lrHistory)
         for train_feats, train_p0, train_p1 in batches:
             optimizer.zero_grad()
             loss = model.loss(train_feats, train_p0, train_p1)
@@ -128,29 +198,78 @@ def main(config):
                 scheduler.step(current_test_loss)
             else:
                 scheduler.step()
+    print('Training complete!')
+    print('Creating animations...')
+    f  = model.net(norm_test).cpu().detach().numpy().flatten()
+    if config['method'] == 'weight_shift':
+        lr  = np.exp(2*f-1)
+        noOnes = np.ones(tlr.shape, dtype=bool)
+    else:
+        noOnes = f != 1
+        f   = f[noOnes]
+        lr  = f / (1 - f)
+    for feature in config['features_to_animate']:
+        params = features_config[feature]
+        kinematic_histogram(
+            test_feats[noOnes, params['loc']].cpu().numpy(),
+            params, epoch, lr, tlr[noOnes], 
+            f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_log.png', 
+            ylim=params['ylim_log']
+        )
+        kinematic_histogram(
+            test_feats[noOnes, params['loc']].cpu().numpy(),
+            params, epoch, lr, tlr[noOnes], 
+            f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_linear.png', 
+            ylim=params['ylim_linear'],
+            log=False
+        )
 
-    # NOTE: plots below reflect weights at the epoch training stopped on,
-    # which may differ from the best checkpoint saved to model.pt below.
-    networkPlots(norm_test, test_p0, test_p1, model.net, trainLoss, testLoss, f'{config["name"]}/complete', lr_history=lrHistory)
-    s  = model.net(norm_test).cpu().detach().numpy().flatten()
-    noOnes = s != 1
-    s = s[noOnes]
-    lr = s / (1 - s)
-    tlr = (test_p1/test_p0).detach().cpu().numpy().flatten()
-    for feature, params in features_config.items():
-        kinematic_histogram(test_feats[noOnes, params['loc']].cpu().numpy(), params, epoch, lr, tlr[noOnes], 
-                            f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}.png', ylim=ylim)
-        kinematic_histogram(test_feats[noOnes, params['loc']].cpu().numpy(), params, epoch, lr, tlr[noOnes], 
-                            f'{config["name"]}/complete/kinematics/{feature}.png', ylim=ylim, epoch_title=False)
-        plots = sorted(glob.glob(f'{config["name"]}/incomplete/kinematics/{feature}/*.png'))
-        animate_plots(plots, f'{config["name"]}/complete/animations/{feature}.gif')
+        plots = sorted(glob.glob(f'{config["name"]}/incomplete/kinematics/{feature}/*_log.png'))
+        animate_plots(plots, f'{config["name"]}/complete/animations/{feature}_log.gif')
+        plots = sorted(glob.glob(f'{config["name"]}/incomplete/kinematics/{feature}/*_linear.png'))
+        animate_plots(plots, f'{config["name"]}/complete/animations/{feature}_linear.gif')
+
+    print('Animations created!')
+    print('deleting plots used for animations...')
+    os.system(f'rm -rf {config["name"]}/incomplete/kinematics')
+    print('Plots deleted!')
 
     if best_state is not None:
         model.net.load_state_dict(best_state)
         print(f"[INFO] restored best checkpoint from epoch {best_epoch}")
 
+    print('Creating final plots and saving best network..')
     # keep the best model for validation
     torch.save(model.net.state_dict(), f'{config["name"]}/model.pt')
+
+    networkPlots(norm_test, test_p0, test_p1, test_pg, model.net, trainLoss, testLoss, f'{config["name"]}/complete', method=config['method'], lr_history=lrHistory)
+    f  = model.net(norm_test).cpu().detach().numpy().flatten()
+
+    if config['method'] == 'weight_shift':
+        lr  = np.exp(2*f-1)
+        noOnes = np.ones(tlr.shape, dtype=bool)
+    else:
+        noOnes = f != 1
+        f   = f[noOnes]
+        lr  = f / (1 - f)
+
+
+    for feature, params in features_config.items():
+        kinematic_histogram(
+            test_feats[noOnes, params['loc']].cpu().numpy(),
+            params, epoch, lr, tlr[noOnes], 
+            f'{config["name"]}/complete/kinematics/{feature}_log.png', 
+            epoch_title=False,
+            scale_ratio=True
+        )
+        kinematic_histogram(
+            test_feats[noOnes, params['loc']].cpu().numpy(),
+            params, epoch, lr, tlr[noOnes], 
+            f'{config["name"]}/complete/kinematics/{feature}_linear.png', 
+            log=False,
+            epoch_title=False,
+            scale_ratio=True
+        )
 
     return config
 

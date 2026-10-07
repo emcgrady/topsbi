@@ -1,21 +1,23 @@
-from numpy.random import poisson
-
+import numpy as np
 import torch, tqdm
 
 def expand_array(
-    coefs: list
+    coefs: list,
+    off_diag: float=1.0,
 ):
     """
     returns pytorch TensorDataset of a quadratic expansion a list of values (lower triangular matrix)
     Args:
         coefs: list of WC values to expand
+        off_diag: factor to multiply off-diagonal elements by
     Returns:
         single-precision torch tensor of expanded WC values 
     """
     array_out = []
     for i in range(len(coefs)):
          for j in range(i+1):
-             array_out += [coefs[i]*coefs[j]]
+            scale = 1.0 if j==i else scale = off_diag
+            array_out += [scale*coefs[i]*coefs[j]]
     return torch.tensor(array_out).type(torch.float32)
     
 def parameterize_weights(
@@ -49,6 +51,27 @@ def parameterize_weights(
     
     return bkg/(bkg.mean()), sig/(sig.mean()), wcs.T
 
+def get_weights(
+    coefs: torch.tensor, 
+    config: dict
+):
+    """
+    return probabilities based on hypotheses in pass config file. 
+
+    Args: 
+        coefs: torch tensor whose rows represent each event and whose columns are the structure constants for the expanded quadratic
+        config: dictionary containing lists of WC values at c0 and c1 
+    Returns:
+        w0: event weight ratio under c0
+        w1: event weight ratio under c1 
+        wg: event weight ratio under cg
+    """
+    pg  = coefs@expand_array(config['cg'])
+    p0  = (coefs@expand_array(config['c0']))/pg
+    p1  = (coefs@expand_array(config['c1']))/pg
+
+    return p0, p1, pg
+
 def get_probabilities(
     coefs: torch.tensor, 
     config: dict
@@ -63,18 +86,13 @@ def get_probabilities(
         p0: event probability ratio under c0 and normalized by the mean
         p1: event probability ratio under c1 and normalized by the mean
     """
+    pg  = coefs@expand_array(config['cg'])
     p0  = coefs@expand_array(config['c0'])
     p1  = coefs@expand_array(config['c1'])
-    p0 /= p0.mean()
-    p1 /= p1.mean()
-
-    if ('cr' in config.keys()) and (config['cr'] is not None):
-        print(f'Reference hypothesis set. Calculating likelihood ratio with respect to \n    {config["cr"]}')
-        pr  = coefs@expand_array(config['cr'])
-        pr /= pr.mean()
-        p0 /= pr
-        p1 /= pr
-    return p0, p1
+    pg /= pg.mean()
+    p0 /= (p0.mean())*pg
+    p1 /= (p1.mean())*pg
+    return p0, p1, pg
 
 def prepare_features(
     features: torch.tensor
@@ -88,6 +106,16 @@ def prepare_features(
         features normalized with mean 0 and std 1
     """
     return (features - features.mean(0))/features.std(0)
+
+def sample_boostrap(
+    sample,
+    seed
+):
+    """
+    Splits and shuffles data into training and testing 
+    """
+    train, test = torch.utils.data.random_split(sample, [0.75, 0.25], generator=torch.Generator().manual_seed(seed))
+    return train, test
 
 def toy_builder(
     tar_prob: torch.tensor, 
@@ -112,21 +140,21 @@ def toy_builder(
     min_m = (tar_prob/can_prob).max().item()
     print(f'Minimum M is {min_m:.2e}...')
     if M is None:
-        M = min_m*1.0001
+        M = min_m
         print(f'No M chosen. Setting M to 0.01% above its minimum ({M:.2e})')
     elif M <= min_m:
-        M = min_m*1.0001
+        M = min_m
         print(f'Choice of M is too low! Setting M to 0.01% above its minimum ({M:.2e})')
     else: 
         print(f'Using M={M:.2f}')
     threshold = tar_prob/(M*can_prob)
     indices   = torch.tensor(range(0, can_prob.shape[0]))
-    batches   = torch.DataLoader(torch.TensorDataset(threshold, indices), batch_size=1_000, shuffle=True, num_workers=n_workers)
+    batches   = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(threshold, indices), batch_size=1_000, shuffle=True, num_workers=n_workers)
     event_mask = []
     print('Rejection sampler prepared')
     enough    = False
     total     = 0
-    n_events  = poisson(tar_events)
+    n_events  = np.random.poisson(tar_events)
     pbar      = tqdm.tqdm(total=n_events)
     while not enough:
         last = total
