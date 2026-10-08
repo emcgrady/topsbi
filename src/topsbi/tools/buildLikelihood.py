@@ -1,5 +1,5 @@
 from topsbi.model.net import Net
-from topsbi.tools.data import get_lower_tri, prepare_features
+from topsbi.tools.data import get_lower_tri
 
 import torch, tqdm, yaml
 
@@ -38,7 +38,7 @@ class likelihood:
             lr: evaluated likelihood ratio
         """
         with torch.no_grad():
-            s = self.model(prepare_features(features))
+            s = self.model(features)
         lr = (s / (1 - s)).flatten()
         return lr
 
@@ -135,9 +135,6 @@ def get_np_parameterization(features, config, up_training, down_training):
     down_model = Net(features.shape[1], config['device'], config['network'])
     up_model.load_state_dict(torch.load(up_training, map_location=torch.device(config['device'])))
     down_model.load_state_dict(torch.load(down_training, map_location=torch.device(config['device'])))
-    with torch.no_grad():
-        up_out = up_model(prepare_features(features))
-        down_out = down_model(prepare_features(features))
     with torch.no_grad():
         up_out = up_model(features)
         down_out = down_model(features)
