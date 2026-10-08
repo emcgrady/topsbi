@@ -13,6 +13,12 @@ Then install and activate the repository UV environment. `uv sync` installs `top
 uv sync
 source .venv/bin/activate
 ```
+## Combining Processor Output
+The ttbarEFT tensor processor writes many small `*.p` files per variation. Combine them into the single dataset that training reads:
+```sh
+python -m topsbi.combine <prefix>/SR_CHANNELS_2j3j/nominal/to_train --out <prefix>/SR_CHANNELS_2j3j/nominal/train.p
+```
+Files are read in sorted order, so the result is reproducible. Pass several directories to combine them (e.g. `to_train` and `validation` for all events). Events with m(ℓℓbb) > 2000 GeV, the reco-level stand-in for m(tt), are removed; change this with `--max-mllbb` (`inf` disables the cut).
 ## Network Training
 All of the training is done through `train.py` which takes a single argument, a path to a configuration yaml.
 ```sh
