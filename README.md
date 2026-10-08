@@ -24,3 +24,9 @@ A small synthetic-data smoke test runs on CPU in about 20 seconds:
 ```sh
 uv run pytest
 ```
+## Code style
+Code is formatted and linted with [ruff](https://docs.astral.sh/ruff/); CI checks both.
+```sh
+uv run ruff format .
+uv run ruff check .
+```
