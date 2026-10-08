@@ -2,7 +2,6 @@ from matplotlib.axes import Axes
 from matplotlib.ticker import StrMethodFormatter
 from matplotlib.animation import FuncAnimation, PillowWriter
 from topsbi.tools.metrics import netEval
-from topcoffea.modules.histEFT import HistEFT
 
 import numpy as np
 import matplotlib.pyplot as plt
