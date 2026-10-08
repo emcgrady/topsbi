@@ -1,6 +1,6 @@
 from topsbi.model.net import Model
 from topsbi.tools.plots import networkPlots, kinematic_histogram, animate_plots
-from topsbi.tools.data import parameterize_weights, get_probabilities, get_weights, sample_boostrap, prepare_features
+from topsbi.tools.data import parameterize_weights, get_probabilities, get_weights, sample_boostrap, prepare_features, get_feature_normalization
 
 import argparse, glob, os, tqdm, torch, yaml
 import numpy as np
@@ -37,14 +37,15 @@ def main(config):
         _ = None
         train_p0, train_p1, train_pg = get_probabilities(train_coefs, config)
         train_coefs = None
-        train_feats = prepare_features(train_feats)
+        norm_mean, norm_stdv = get_feature_normalization(train_feats)
+        train_feats = (train_feats - norm_mean)/norm_stdv
         test_feats,  test_coefs, _  = test[:]
         # test_feats,  test_coefs  = test[:]
         test = None
         _ = None
         test_p0,  test_p1,  test_pg  = get_probabilities(test_coefs, config)
         test_coefs  = None
-        norm_test   = prepare_features(test_feats)
+        norm_test   = (test_feats - norm_mean)/norm_stdv
         tlr = (test_p1/test_p0).detach().cpu().numpy().flatten()
     elif config['method'] == 'weights_only':
         train_feats, train_coefs, _ = train[:]
@@ -54,7 +55,8 @@ def main(config):
         _ = None
         train_p0, train_p1, train_pg = get_weights(train_coefs, config)
         train_coefs = None
-        train_feats = prepare_features(train_feats)
+        norm_mean, norm_stdv = get_feature_normalization(train_feats)
+        train_feats = (train_feats - norm_mean)/norm_stdv
         test_feats,  test_coefs, _  = test[:]
         test_coefs = test_coefs.to(torch.float32)
         test_feats = test_feats.to(torch.float32)
@@ -62,7 +64,7 @@ def main(config):
         _ = None
         test_p0,  test_p1,  test_pg  = get_weights(test_coefs, config)
         test_coefs  = None
-        norm_test   = prepare_features(test_feats)
+        norm_test   = (test_feats - norm_mean)/norm_stdv
         tlr = (test_p1/test_p0).detach().cpu().numpy().flatten()
     elif config['method'] == 'alice':
         train_feats, train_coefs = train[:]

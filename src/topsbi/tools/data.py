@@ -99,6 +99,19 @@ def get_probabilities(
     p1 /= (p1.mean())*pg
     return p0, p1, pg
 
+def get_feature_normalization(
+        features: torch.tensor
+):
+    """
+    Get mean and standard deviation to normalize a set of features. 
+    Args:
+        features: torch tensor whose rows are each event and whose columns are each features
+    Returns:
+        feature mean
+        feature standard deviation
+    """
+    return features.mean(0), features.std(0)
+
 def prepare_features(
     features: torch.tensor
 ):
