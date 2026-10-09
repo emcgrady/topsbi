@@ -9,6 +9,7 @@
 - `device`: The device used for training. Use `cpu` for CPU training and `cuda` for GPU training. For more options, see the [PyTorch documentation](https://pytorch.org/docs/stable/tensor_attributes.html#torch-device).
 - `epochs`: The number of epochs used to train.
 - `learningRate`: Initial learning rate for network training
+- `lumi`: luminosity per era, indexed by the `year_int` feature (0: UL16APV, 1: UL16, 2: UL17, 3: UL18), e.g. `[19.52, 16.81, 41.48, 59.83]`. Required by `weights_only`; only relative values matter for training
 - `method`: 2 options
     1. `stitched`: choose a fixed `c1` to train with. WC values are latent information with respect to the network
     1. `parameterized`: scan values of `c1` for training. WC values are observable information with resepct to the network
@@ -17,3 +18,4 @@
 - `ranges`: dictionary of WCs with ranges of WC values to randomly select from for parameterized training (not used in stitched training)
 - `seed`: random seed used for network initialization
 - `wcs`: array of WC names for sample
+- `year_loc`: optional column of the `year_int` feature used to look up `lumi` (default 21)
