@@ -119,18 +119,6 @@ def get_feature_normalization(features: torch.tensor):
     return features.mean(0), features.std(0)
 
 
-def prepare_features(features: torch.tensor):
-    """
-    Normalize features for use in training.
-
-    Args:
-        features: torch tensor whose rows are each event and whose columns are each features
-    Returns:
-        features normalized with mean 0 and std 1
-    """
-    return (features - features.mean(0)) / features.std(0)
-
-
 def sample_boostrap(sample, seed):
     """
     Splits and shuffles data into training and testing

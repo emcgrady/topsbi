@@ -109,6 +109,8 @@ def main(config):
         config=config['network'],
         seed=config['seed'],
     )
+    # the network standardises its inputs with the training-set statistics, which are saved in model.pt
+    model.net.set_feature_normalization(*get_feature_normalization(train_feats))
     optimizer = torch.optim.Adam(model.net.parameters(), lr=config['learningRate'])
 
     scheduler_type = config.get('scheduler', 'plateau')
@@ -142,7 +144,7 @@ def main(config):
         print("[INFO] scheduler: none")
 
     trainLoss = [model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item()]
-    testLoss = [model.loss(norm_test, test_p0, test_p1).item()]
+    testLoss = [model.loss(test_feats, test_p0, test_p1).item()]
     lrHistory = [optimizer.param_groups[0]['lr']]
 
     if len(glob.glob(f'{config["name"]}/complete')) > 0:
@@ -162,7 +164,7 @@ def main(config):
     best_state = None
 
     for epoch in tqdm.tqdm(range(config['epochs'])):
-        f = model.net(norm_test).cpu().detach().numpy().flatten()
+        f = model.net(test_feats).cpu().detach().numpy().flatten()
         if config['method'] == 'weight_shift':
             lr = np.exp(2 * f - 1)
             noOnes = np.ones(tlr.shape, dtype=bool)
@@ -215,7 +217,7 @@ def main(config):
         lrHistory.append(optimizer.param_groups[0]['lr'])
         if epoch % 50 == 0:
             networkPlots(
-                norm_test,
+                test_feats,
                 test_p0,
                 test_p1,
                 test_pg,
@@ -231,7 +233,7 @@ def main(config):
             loss = model.loss(train_feats, train_p0, train_p1)
             loss.backward()
             optimizer.step()
-        current_test_loss = model.loss(norm_test, test_p0, test_p1).item()
+        current_test_loss = model.loss(test_feats, test_p0, test_p1).item()
         testLoss.append(current_test_loss)
 
         # ── early stopping ──
@@ -255,7 +257,7 @@ def main(config):
                 scheduler.step()
     print('Training complete!')
     print('Creating animations...')
-    f = model.net(norm_test).cpu().detach().numpy().flatten()
+    f = model.net(test_feats).cpu().detach().numpy().flatten()
     if config['method'] == 'weight_shift':
         lr = np.exp(2 * f - 1)
         noOnes = np.ones(tlr.shape, dtype=bool)
@@ -304,7 +306,7 @@ def main(config):
     torch.save(model.net.state_dict(), f'{config["name"]}/model.pt')
 
     networkPlots(
-        norm_test,
+        test_feats,
         test_p0,
         test_p1,
         test_pg,
@@ -315,7 +317,7 @@ def main(config):
         method=config['method'],
         lr_history=lrHistory,
     )
-    f = model.net(norm_test).cpu().detach().numpy().flatten()
+    f = model.net(test_feats).cpu().detach().numpy().flatten()
 
     if config['method'] == 'weight_shift':
         lr = np.exp(2 * f - 1)
