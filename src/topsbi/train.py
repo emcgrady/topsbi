@@ -61,6 +61,8 @@ def main(config):
     # the network standardises its inputs with the training-set statistics, which are saved in model.pt
     model.net.set_feature_normalization(*get_feature_normalization(train_feats))
     optimizer = torch.optim.Adam(model.net.parameters(), lr=config['learningRate'])
+    # dropout stays off for every evaluation (losses, early stopping, plots); on only for the optimizer steps
+    model.net.eval()
 
     scheduler_type = config.get('scheduler', 'plateau')
     if scheduler_type == 'plateau':
@@ -92,7 +94,7 @@ def main(config):
         scheduler = None
         print("[INFO] scheduler: none")
 
-    trainLoss = [model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item()]
+    trainLoss = [model.loss(train_feats, train_w0, train_w1).item()]
     testLoss = [model.loss(test_feats, test_w0, test_w1).item()]
     lrHistory = [optimizer.param_groups[0]['lr']]
 
@@ -162,7 +164,6 @@ def main(config):
                     log=False,
                 )
 
-        trainLoss.append(model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item())
         lrHistory.append(optimizer.param_groups[0]['lr'])
         if epoch % 50 == 0:
             networkPlots(
@@ -176,11 +177,15 @@ def main(config):
                 method=config['method'],
                 lr_history=lrHistory,
             )
-        for train_feats, train_w0, train_w1 in batches:
+        model.net.train()
+        for x, w0, w1 in batches:
             optimizer.zero_grad()
-            loss = model.loss(train_feats, train_w0, train_w1)
+            loss = model.loss(x, w0, w1)
             loss.backward()
             optimizer.step()
+        model.net.eval()
+        # both losses after this epoch's updates, so trainLoss[i] and testLoss[i] are the same network state
+        trainLoss.append(model.loss(train_feats, train_w0, train_w1).item())
         current_test_loss = model.loss(test_feats, test_w0, test_w1).item()
         testLoss.append(current_test_loss)
 

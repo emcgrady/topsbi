@@ -231,7 +231,7 @@ def toy_builder(
         last = total
         for t, index in batches:
             event_mask += [index[torch.where(torch.rand(len(t)) < t)[0]]]
-        total = len(event_mask)
+        total = sum(len(m) for m in event_mask)
         pbar.update(total - last)
         if total > n_events:
             enough = True
