@@ -44,28 +44,42 @@ def main(config):
         _ = None
         train_p0, train_p1, train_pg = get_probabilities(train_coefs, config)
         train_coefs = None
+        norm_mean, norm_stdv = get_feature_normalization(train_feats)
+        train_feats = (train_feats - norm_mean) / norm_stdv
         test_feats, test_coefs, _ = test[:]
         # test_feats,  test_coefs  = test[:]
         test = None
         _ = None
         test_p0, test_p1, test_pg = get_probabilities(test_coefs, config)
         test_coefs = None
+        norm_test = (test_feats - norm_mean) / norm_stdv
         tlr = (test_p1 / test_p0).detach().cpu().numpy().flatten()
     elif config['method'] == 'weights_only':
+        year_loc = config.get('year_loc', 21)
         train_feats, train_coefs, _ = train[:]
-        train_coefs = train_coefs.to(torch.float32)
         train_feats = train_feats.to(torch.float32)
         train = None
         _ = None
-        train_p0, train_p1, train_pg = get_weights(train_coefs, config)
+        train_p0, train_p1, train_pg = get_weights(train_coefs, config, train_feats[:, year_loc])
         train_coefs = None
+        # one shared constant so the typical weight is O(1) for Adam,
+        # applied to both classes and to the test set so the learned ratio is unchanged
+        w_norm = train_p0.mean()
+        train_p0 /= w_norm
+        train_p1 /= w_norm
+        train_pg /= w_norm
+        norm_mean, norm_stdv = get_feature_normalization(train_feats)
+        train_feats = (train_feats - norm_mean) / norm_stdv
         test_feats, test_coefs, _ = test[:]
-        test_coefs = test_coefs.to(torch.float32)
         test_feats = test_feats.to(torch.float32)
         test = None
         _ = None
-        test_p0, test_p1, test_pg = get_weights(test_coefs, config)
+        test_p0, test_p1, test_pg = get_weights(test_coefs, config, test_feats[:, year_loc])
         test_coefs = None
+        test_p0 /= w_norm
+        test_p1 /= w_norm
+        test_pg /= w_norm
+        norm_test = (test_feats - norm_mean) / norm_stdv
         tlr = (test_p1 / test_p0).detach().cpu().numpy().flatten()
     elif config['method'] == 'alice':
         train_feats, train_coefs = train[:]

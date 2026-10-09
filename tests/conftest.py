@@ -22,6 +22,7 @@ def make_dataset(n_events: int, seed: int = 0) -> torch.utils.data.TensorDataset
     gen = torch.Generator().manual_seed(seed)
     n = N_WCS + 1
     features = torch.rand(n_events, N_FEATURES, generator=gen) * 200
+    features[:, 21] = torch.randint(0, 4, (n_events,), generator=gen).float()  # year_int
     v = torch.ones(n_events, n, dtype=torch.float64)
     v[:, 1:] = 0.1 * torch.tanh((features[:, : n - 1].double() - 100) / 50)
     a = v[:, :, None] * v[:, None, :] + 1e-4 * torch.eye(n, dtype=torch.float64)
@@ -64,6 +65,7 @@ def train_config(tmp_path):
         'features': str(features_path),
         'features_to_animate': ['feat0', 'feat1'],
         'learningRate': 0.001,
+        'lumi': [19.52, 16.81, 41.48, 59.83],
         'method': 'weights_only',
         'name': str(tmp_path / 'out'),
         'network': [

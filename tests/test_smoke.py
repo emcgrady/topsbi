@@ -42,3 +42,26 @@ def test_weights_only_training(train_config, tmp_path):
     performance = yaml.safe_load((out / 'complete' / 'performance.yml').read_text())
     assert 0.0 <= performance['auc'] <= 1.0
     assert (out / 'complete' / 'animations' / 'feat0_log.gif').exists()
+
+
+def test_get_weights_stitched():
+    """weights_only weights are L_y * S @ T(c): the per-sample normalization in S is kept, not divided out by cg."""
+    from conftest import CG, N_WCS
+    from topsbi.tools.data import get_weights
+
+    gen = torch.Generator().manual_seed(1)
+    coefs = torch.rand(50, (N_WCS + 1) * (N_WCS + 2) // 2, generator=gen, dtype=torch.float64) * 1e-8
+    years = torch.randint(0, 4, (50,), generator=gen).float()
+    c1 = [1.0] + [0.0] * N_WCS
+    c1[4] = 0.1
+    config = {'c0': [1.0] + [0.0] * N_WCS, 'c1': c1, 'cg': CG, 'lumi': [19.52, 16.81, 41.48, 59.83]}
+
+    w0, w1, wg = get_weights(coefs, config, years)
+
+    lumi = torch.tensor(config['lumi'], dtype=torch.float64)[years.long()]
+    for w, c in [(w0, config['c0']), (w1, c1), (wg, CG)]:
+        assert w.dtype == torch.float32
+        torch.testing.assert_close(w.double(), lumi * (coefs @ get_lower_tri(c, dtype=torch.float64)), rtol=1e-6, atol=0)
+
+    with pytest.raises(KeyError):
+        get_weights(coefs, {k: v for k, v in config.items() if k != 'lumi'}, years)
