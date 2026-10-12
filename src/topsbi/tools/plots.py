@@ -30,7 +30,7 @@ def animate_plots(plots, outname, fps=5):
         image.set_data(plt.imread(plots[i]))
         return (image,)
 
-    anim = FuncAnimation(fig, animate, frames=len(plots), interval=200, blit=True)
+    anim = FuncAnimation(fig, animate, frames=len(plots), interval=1000, blit=True)
     anim.save(outname, writer=PillowWriter(fps=fps))
     plt.close(fig)
 
@@ -267,7 +267,7 @@ def lr_curve(
     ax.set_ylabel('Learning Rate')
 
 
-def networkPlots(features, p0, p1, pg, net, train_loss, test_loss, label, method='stitched', lr_history=None):
+def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='stitched', lr_history=None):
     mh.style.use("CMS")
     os.makedirs(f'{label}', mode=0o755, exist_ok=True)
     torch.save(net.state_dict(), f'{label}/model.pt')
@@ -276,7 +276,6 @@ def networkPlots(features, p0, p1, pg, net, train_loss, test_loss, label, method
     f = net(features).cpu().detach().numpy().flatten()
     p0 = p0.detach().cpu().numpy().flatten()
     p1 = p1.detach().cpu().numpy().flatten()
-    pg = pg.detach().cpu().numpy().flatten()
 
     # convert tensors to np arrays
     if (method == 'stitched') or (method == 'alice') or (method == 'weights_only'):
@@ -284,7 +283,6 @@ def networkPlots(features, p0, p1, pg, net, train_loss, test_loss, label, method
         f = f[noOnes]
         p0 = p0[noOnes]
         p1 = p1[noOnes]
-        pg = pg[noOnes]
         lrhat = f / (1 - f)
     elif method == 'weight_shift':
         f = 2 * f - 1

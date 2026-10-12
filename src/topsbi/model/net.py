@@ -54,6 +54,7 @@ class Net(torch.nn.Module):
                 torch.nn.Linear(8, 1),
                 torch.nn.Sigmoid(),
             )
+        self.device = device
         self.main_module.type(torch.float32)
         # training-set feature mean/std, set by set_feature_normalization and saved in the state dict
         self.register_buffer('feature_mean', torch.zeros(nFeatures))
@@ -68,8 +69,8 @@ class Net(torch.nn.Module):
             mean: per-feature mean of the training set
             std: per-feature standard deviation of the training set
         """
-        self.feature_mean.copy_(mean)
-        self.feature_std.copy_(std)
+        self.feature_mean.copy_(mean).to(self.device)
+        self.feature_std.copy_(std).to(self.device)
 
     def forward(self, x):
         return self.main_module((x - self.feature_mean) / self.feature_std)
