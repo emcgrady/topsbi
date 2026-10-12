@@ -1,9 +1,7 @@
 from topsbi.model.net import Model
 from topsbi.tools.plots import networkPlots, kinematic_histogram, animate_plots
 from topsbi.tools.data import (
-    parameterize_weights,
-    get_probabilities,
-    get_weights,
+    prepare_weights,
     sample_boostrap,
     get_feature_normalization,
 )
@@ -24,80 +22,31 @@ def main(config):
         config['method'] = 'stitched'
 
     if config['bootstrap']:
-        train, test = sample_boostrap(torch.load(f'{config["data"]}/train.p', weights_only=False), config['seed'])
+        train, test = sample_boostrap(torch.load(f'{config["data"]}/train.p', weights_only=False, map_location=config['device']), config['seed'])
 
     else:
-        test_feats, test_coefs = torch.load(f'{config["data"]}/test.p', weights_only=False)[:]
-        train_feats, train_coefs = torch.load(f'{config["data"]}/train.p', weights_only=False)[:]
+        test = torch.load(f'{config["data"]}/test.p', weights_only=False).to(config['device'])
+        train = torch.load(f'{config["data"]}/train.p', weights_only=False).to(config['device'])
 
-    if config['method'] == 'parameterized':
-        train_feats, train_coefs = train[:]
-        test_feats, test_coefs = test[:]
-        test_p0, test_p1, test_wcs = parameterize_weights(test_coefs, config)
-        train_p0, train_p1, train_wcs = parameterize_weights(train_coefs, config)
-        test_feats = torch.concatenate([test_feats, test_wcs], dim=1)
-        train_feats = torch.concatenate([train_feats, train_wcs], dim=1)
-    elif config['method'] == 'stitched':
-        train_feats, train_coefs, _ = train[:]
-        # train_feats, train_coefs = train[:]
-        train = None
-        _ = None
-        train_p0, train_p1, train_pg = get_probabilities(train_coefs, config)
-        train_coefs = None
-        norm_mean, norm_stdv = get_feature_normalization(train_feats)
-        train_feats = (train_feats - norm_mean) / norm_stdv
-        test_feats, test_coefs, _ = test[:]
-        # test_feats,  test_coefs  = test[:]
-        test = None
-        _ = None
-        test_p0, test_p1, test_pg = get_probabilities(test_coefs, config)
-        test_coefs = None
-        norm_test = (test_feats - norm_mean) / norm_stdv
-        tlr = (test_p1 / test_p0).detach().cpu().numpy().flatten()
-    elif config['method'] == 'weights_only':
-        year_loc = config.get('year_loc', 21)
-        train_feats, train_coefs, _ = train[:]
-        train_feats = train_feats.to(torch.float32)
-        train = None
-        _ = None
-        train_p0, train_p1, train_pg = get_weights(train_coefs, config, train_feats[:, year_loc])
-        train_coefs = None
-        # one shared constant so the typical weight is O(1) for Adam,
-        # applied to both classes and to the test set so the learned ratio is unchanged
-        w_norm = train_p0.mean()
-        train_p0 /= w_norm
-        train_p1 /= w_norm
-        train_pg /= w_norm
-        norm_mean, norm_stdv = get_feature_normalization(train_feats)
-        train_feats = (train_feats - norm_mean) / norm_stdv
-        test_feats, test_coefs, _ = test[:]
-        test_feats = test_feats.to(torch.float32)
-        test = None
-        _ = None
-        test_p0, test_p1, test_pg = get_weights(test_coefs, config, test_feats[:, year_loc])
-        test_coefs = None
-        test_p0 /= w_norm
-        test_p1 /= w_norm
-        test_pg /= w_norm
-        norm_test = (test_feats - norm_mean) / norm_stdv
-        tlr = (test_p1 / test_p0).detach().cpu().numpy().flatten()
-    elif config['method'] == 'alice':
-        train_feats, train_coefs = train[:]
-        test_feats, test_coefs = test[:]
-        test_p0, test_p1 = get_probabilities(test_coefs, config)
-        train_p0, train_p1 = get_probabilities(train_coefs, config)
-    elif config['method'] == 'weight_shift':
-        train_feats, train_p0, train_p1, train_pg, _ = train[:]
-        test_feats, test_p0, test_p1, test_pg, _ = test[:]
-        train_pg /= train_pg.mean()
-        train_p0 /= (train_p0.mean()) * train_pg
-        train_p1 /= (train_p1.mean()) * train_pg
-        test_pg /= test_pg.mean()
-        test_p0 /= (test_p0.mean()) * test_pg
-        test_p1 /= (test_p1.mean()) * test_pg
+    train_feats, train_w0, train_w1 = prepare_weights(train, config)
+    test_feats, test_w0, test_w1 = prepare_weights(test, config)
+    train = None; test = None
+
+    print(config['mean_norm'])
+    if 'mean_norm' not in config.keys():
+        config['mean_norm'] = False
+    if config['mean_norm']:
+        print('in conditional')
+        w_norm = train_w0.mean()
+        train_w0 /= w_norm
+        train_w1 /= w_norm
+        test_w0 /= w_norm
+        test_w1 /= w_norm
+
+    tlr = (test_w1 / test_w0).detach().cpu().numpy().flatten()
 
     batches = torch.utils.data.DataLoader(
-        torch.utils.data.TensorDataset(train_feats, train_p0, train_p1),
+        torch.utils.data.TensorDataset(train_feats, train_w0, train_w1),
         batch_size=config['batchSize'],
         shuffle=True,
         num_workers=1,
@@ -144,7 +93,7 @@ def main(config):
         print("[INFO] scheduler: none")
 
     trainLoss = [model.loss(batches.dataset[:][0], batches.dataset[:][1], batches.dataset[:][2]).item()]
-    testLoss = [model.loss(test_feats, test_p0, test_p1).item()]
+    testLoss = [model.loss(test_feats, test_w0, test_w1).item()]
     lrHistory = [optimizer.param_groups[0]['lr']]
 
     if len(glob.glob(f'{config["name"]}/complete')) > 0:
@@ -218,9 +167,8 @@ def main(config):
         if epoch % 50 == 0:
             networkPlots(
                 test_feats,
-                test_p0,
-                test_p1,
-                test_pg,
+                test_w0,
+                test_w1,
                 model.net,
                 trainLoss,
                 testLoss,
@@ -228,12 +176,12 @@ def main(config):
                 method=config['method'],
                 lr_history=lrHistory,
             )
-        for train_feats, train_p0, train_p1 in batches:
+        for train_feats, train_w0, train_w1 in batches:
             optimizer.zero_grad()
-            loss = model.loss(train_feats, train_p0, train_p1)
+            loss = model.loss(train_feats, train_w0, train_w1)
             loss.backward()
             optimizer.step()
-        current_test_loss = model.loss(test_feats, test_p0, test_p1).item()
+        current_test_loss = model.loss(test_feats, test_w0, test_w1).item()
         testLoss.append(current_test_loss)
 
         # ── early stopping ──
@@ -307,9 +255,8 @@ def main(config):
 
     networkPlots(
         test_feats,
-        test_p0,
-        test_p1,
-        test_pg,
+        test_w0,
+        test_w1,
         model.net,
         trainLoss,
         testLoss,

@@ -1,6 +1,21 @@
 import numpy as np
 import torch, tqdm
 
+def prepare_weights(
+    data: torch.utils.data.TensorDataset,
+    config: dict,
+):
+    method = config['method']
+    if method == 'weights_only':
+        year_loc = config.get('year_loc', 21)
+        features, coefficients, _ = data[:]
+        features = features.to(torch.float32)
+        w0, w1 = get_weights(coefficients, config, features[:, year_loc])
+    elif method == 'stitched':
+        features, coefficients, _ = data[:]
+        w0, w1 = get_probabilities(coefficients, config)
+    return features, w0, w1
+
 
 def get_lower_tri(
     vec: list,
@@ -79,12 +94,14 @@ def get_weights(coefs: torch.tensor, config: dict, years: torch.tensor):
         raise KeyError("weights_only requires 'lumi': a list of luminosities indexed by the year_int feature")
     # compute in double precision, the quadratic terms can cancel far from cg
     coefs = coefs.to(torch.float64)
-    lumi = torch.tensor(config['lumi'], dtype=torch.float64)[years.long()]
-    wg = lumi * (coefs @ get_lower_tri(config['cg'], dtype=torch.float64))
-    w0 = lumi * (coefs @ get_lower_tri(config['c0'], dtype=torch.float64))
-    w1 = lumi * (coefs @ get_lower_tri(config['c1'], dtype=torch.float64))
-
-    return w0.to(torch.float32), w1.to(torch.float32), wg.to(torch.float32)
+    lumi = torch.tensor(config['lumi'], dtype=torch.float64, device=config['device'])[years.long()]
+    w0 = lumi * (coefs @ get_lower_tri(config['c0'], dtype=torch.float64).to(config['device'])) * 1000
+    w1 = lumi * (coefs @ get_lower_tri(config['c1'], dtype=torch.float64).to(config['device'])) * 1000
+    if config['cg'] is not None:
+        wg = lumi * (coefs @ get_lower_tri(config['cg'], dtype=torch.float64).to(config['device'])) * 1000
+        w0 /= wg
+        w1 /= wg
+    return (w0).to(torch.float32), (w1).to(torch.float32)
 
 
 def get_probabilities(coefs: torch.tensor, config: dict):
@@ -98,13 +115,11 @@ def get_probabilities(coefs: torch.tensor, config: dict):
         p0: event probability ratio under c0 and normalized by the mean
         p1: event probability ratio under c1 and normalized by the mean
     """
-    pg = coefs @ get_lower_tri(config['cg'])
     p0 = coefs @ get_lower_tri(config['c0'])
     p1 = coefs @ get_lower_tri(config['c1'])
-    pg /= pg.mean()
-    p0 /= (p0.mean()) * pg
-    p1 /= (p1.mean()) * pg
-    return p0, p1, pg
+    p0 /= (p0.mean())
+    p1 /= (p1.mean())
+    return p0, p1
 
 
 def get_feature_normalization(features: torch.tensor):
