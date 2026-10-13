@@ -32,11 +32,9 @@ def main(config):
     test_feats, test_w0, test_w1 = prepare_weights(test, config)
     train = None; test = None
 
-    print(config['mean_norm'])
     if 'mean_norm' not in config.keys():
         config['mean_norm'] = False
     if config['mean_norm']:
-        print('in conditional')
         w_norm = train_w0.mean()
         train_w0 /= w_norm
         train_w1 /= w_norm
