@@ -6,7 +6,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 Simulation-based inference for SMEFT (Brehmer et al., arXiv:1805.00020): a DNN binary classifier is trained to separate events weighted at two points in Wilson-coefficient (WC) space, `c0` and `c1`. The classifier output `s` is converted to a likelihood ratio `s / (1 - s)`, and an ensemble of such networks is combined to give the likelihood ratio at arbitrary WC points.
 
-The methods are written up in https://www.overleaf.com/read/vbnhkwndrbpm#8e3a7a. The page renders client-side, so fetching it returns no content; ask the user for the `.tex` or PDF when you need the derivations.
+The methods are written up in `/users/cmcgrad2/eft_nsbi_framework/main.tex` (repo: `git@github.com:emcgrady/eft_nsbi_framework.git`). Its sections cover stitching weighted SMEFT samples, training techniques, validation methods, and likelihood scans. Read it for the derivations behind the code.
 
 ## Commands
 
