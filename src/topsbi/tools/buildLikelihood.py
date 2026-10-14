@@ -2,6 +2,7 @@ from topsbi.model.net import Net
 from topsbi.tools.data import get_lower_tri
 
 import torch, tqdm, yaml
+import numpy as np
 
 torch.set_num_threads(1)
 
@@ -124,7 +125,12 @@ class ensemble:
         for seed in config['seeds'].keys():
             likelihood_config['sm'] = config['seeds'][seed]['sm']
             likelihood_config['networks'] = config['seeds'][seed]['networks']
+            n_nets = len(config['seeds'][seed]['networks']) + 1
+            total_nets += n_nets
             temp_likelihood = full_likelihood(likelihood_config, features)
+            if hist_residuals:
+                bins = np.logspace(-10, 3, 200)
+                self.residuals += [np.histogram(temp_likelihood.residuals, bins=bins)]
             if self.zeros_mask is None:
                 self.zeros_mask = temp_likelihood.zerosMask
                 self.gammas  = torch.zeros((int(self.zeros_mask.sum()), n_events), dtype=temp_likelihood.gammas.dtype)

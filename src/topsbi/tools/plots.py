@@ -882,10 +882,12 @@ def lr_calibration_difference(
 
     if include_stdv:
         ax.bar(qbins[:-1], stdv_width, bottom=stdv_down, width=(qbins[1:] - qbins[:-1]), **mean_stdv_formatting)
-    ax.plot([qbins[0], qbins[-1]], [0, 0], color='grey', linestyle=':', label='_nolegend_')
-    ax.bar(qbins[:-1], err_width, bottom=err_down, width=(qbins[1:] - qbins[:-1]), **mean_error_formatting)
+    ax.plot([qbins[0], qbins[-1]], [0,0], color = 'grey', linestyle = ':', label = '_nolegend_')
+    ax.bar(qbins[:-1], err_width, bottom=err_down, width=(qbins[1:] - qbins[:-1]),  **mean_error_formatting)
 
-    ax.hist(meanlrhat, weights=differ, bins=qbins, histtype='step', color='k', label=r'$r - \hat{r}$')
+    ax.bar(qbins[:-1], differ, width=(qbins[1:] - qbins[:-1]), label=r'$r - \hat{r}$', facecolor='none', edgecolor='k', align='edge', )
+    
+    # ax.hist(meanlrhat, weights=differ, bins=qbins, histtype='step', color='k', label=r'$r - \hat{r}$')
 
     pulls = np.abs(differ) / mean_err
     pulls = pulls[np.isfinite(pulls)]
@@ -898,7 +900,7 @@ def lr_calibration_difference(
     # binomial scatter of the fraction of bins inside each interval
     ci_diff_err = [np.sqrt(e * (1 - e) / n).item() for e in expected]
 
-    mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
+    # mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
     ax.set_xlabel(r'$\left\langle\hat{r}\,(x;\theta_1,\theta_0)\right\rangle$')
     ax.set_ylabel(
         r'$\left\langle{r}\,(x,z;\theta_1,\theta_0)\right\rangle - \left\langle\hat{{r}}\,(x;\theta_1,\theta_0)\right\rangle$'
