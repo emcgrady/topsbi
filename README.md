@@ -16,11 +16,11 @@ source .venv/bin/activate
 ## Network Training
 All of the training is done through `train.py` which takes a single argument, a path to a configuration yaml.
 ```sh
-python -m topsbi.train examples/training/stitched.yml
+python -m topsbi.train examples/training/weights_only.yml
 ```
-Examples of these yaml files can be found in the examples directory. As the fields in these configuration files will be updated regularly as various features are added, a separate README can be found in this directory.
+Examples of these yaml files can be found in the examples directory. As the fields in these configuration files will be updated regularly as various features are added, a separate README can be found in this directory. It also explains the calibration metrics written to `performance.yml` and the plots produced after training.
 ## Tests
-A small synthetic-data smoke test runs on CPU in about 20 seconds:
+The synthetic-data tests run on CPU in about a minute:
 ```sh
 uv run pytest
 ```

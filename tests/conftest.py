@@ -8,7 +8,6 @@ WCS = [
     'cQd1', 'ctj1', 'cQj31', 'ctj8', 'ctd1', 'ctd8', 'ctGRe', 'ctGIm',
     'cQj11', 'cQj18', 'ctu8', 'cQd8', 'ctu1', 'cQu1', 'cQj38', 'cQu8',
 ]
-CG = [1.0] + [1.5] * 6 + [-0.5] * 2 + [1.5] * 8
 
 
 def make_dataset(n_events: int, seed: int = 0) -> torch.utils.data.TensorDataset:
@@ -58,7 +57,6 @@ def train_config(tmp_path):
         'bootstrap': True,
         'c0': [1.0] + [0.0] * N_WCS,
         'c1': c1,
-        'cg': CG,
         'data': str(data_dir),
         'device': 'cpu',
         'epochs': 2,
@@ -75,3 +73,11 @@ def train_config(tmp_path):
         'seed': 42,
         'wcs': WCS,
     }
+
+
+@pytest.fixture
+def holdout_config(train_config, tmp_path):
+    """train_config with a separate holdout dataset for the final evaluation."""
+    holdout = tmp_path / 'data' / 'holdout.p'
+    torch.save(make_dataset(1500, seed=1), holdout)
+    return {**train_config, 'holdout': str(holdout)}
