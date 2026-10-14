@@ -17,6 +17,7 @@ def netEval(netOut, bWeights, sWeights, threshold=0.5, nPoints=200):
 
     return fpr, tpr, auc
 
+
 def group_closure(lrhat, lr, w0, groups, n_rbins=5, min_events=200):
     """
     Closure of the learned ratio in cells of (group x lrhat quantile bin).
@@ -51,10 +52,17 @@ def group_closure(lrhat, lr, w0, groups, n_rbins=5, min_events=200):
             # learned and true sums share events, so propagate per-event residuals
             err = np.sqrt(((A - R * B) ** 2).sum()) / B.sum()
             cells.append((tuple(g.tolist()), j, R - 1, err, B.sum()))
-    if not cells: 
+    if not cells:
         nan = float('nan')
-        return {'chi2_excess': nan, 'chi2_excess_err': nan, 'rms_bias': nan, 'worst_pull': nan,
-                'n_cells': 0, 'cells': [], 'pulls': np.array([])}
+        return {
+            'chi2_excess': nan,
+            'chi2_excess_err': nan,
+            'rms_bias': nan,
+            'worst_pull': nan,
+            'n_cells': 0,
+            'cells': [],
+            'pulls': np.array([]),
+        }
     bias = np.array([c[2] for c in cells])
     err = np.array([c[3] for c in cells])
     W = np.array([c[4] for c in cells])

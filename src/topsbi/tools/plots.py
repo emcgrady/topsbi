@@ -34,6 +34,7 @@ def animate_plots(plots, outname, fps=5):
     anim.save(outname, writer=PillowWriter(fps=fps))
     plt.close(fig)
 
+
 def merge_sparse_bins(x: np.array, weights: np.array, edges: np.array, min_neff: float = 30):
     '''
     Merge neighbouring bins until each holds at least min_neff effective events.
@@ -129,7 +130,12 @@ def kinematic_histogram(
     # bins have different widths, so show yields per unit of the variable
     mh.histplot(n_correct / widths, bins, yerr=cErr / widths, ax=ax[0], label=r'$r\,(x,z;\theta_1,\theta_0)$')
     mh.histplot(
-        n_learned / widths, bins, yerr=lErr / widths, ax=ax[0], linestyle='dashdot', label=r'$\hat{r}\,(x;\theta_1,\theta_0)$'
+        n_learned / widths,
+        bins,
+        yerr=lErr / widths,
+        ax=ax[0],
+        linestyle='dashdot',
+        label=r'$\hat{r}\,(x;\theta_1,\theta_0)$',
     )
 
     ratio = np.divide(n_learned, n_correct, where=(n_correct > 0), out=np.zeros(n_learned.shape))
@@ -156,7 +162,7 @@ def kinematic_histogram(
     ax[0].set_ylabel(f'Weighted events / {unit}' if unit else 'Weighted events / bin width')
     ax[0].set_xlim(bins[0], bins[-1])
     plt.setp(ax[0].get_xticklabels(), visible=False)
-    ax[1].set_xlabel(f'{params.get('label')} {unit}' if unit else params.get('label'))
+    ax[1].set_xlabel(params['label'] + (f' [{unit}]' if unit else ''))
     ax[1].set_ylabel(r'$\frac{\hat{r}(x;\theta_1,\theta_0)}{r(x,z;\theta_1,\theta_0)}$')
     ax[0].legend()
     if log:
@@ -317,10 +323,20 @@ def lr_curve(
     ax.set_ylabel('Learning Rate')
 
 
-def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='stitched', lr_history=None,
-                 group_cols=(21, 19), group_caps={19: 4},
-                 group_labels={21: ('', {0: '2016APV', 1: '2016', 2: '2017', 3: '2018'}),
-                               19: ('jets', {4: '≥4'})}):
+def networkPlots(
+    features,
+    p0,
+    p1,
+    net,
+    train_loss,
+    test_loss,
+    label,
+    method='stitched',
+    lr_history=None,
+    group_cols=(21, 19),
+    group_caps={19: 4},
+    group_labels={21: ('', {0: '2016APV', 1: '2016', 2: '2017', 3: '2018'}), 19: ('jets', {4: '≥4'})},
+):
     mh.style.use("CMS")
     os.makedirs(f'{label}', mode=0o755, exist_ok=True)
     torch.save(net.state_dict(), f'{label}/model.pt')
@@ -342,7 +358,7 @@ def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='st
         lrhat = np.exp(f)
 
     lr = p1 / p0
-    lr_norm_factor = p0/p0.mean()
+    lr_norm_factor = p0 / p0.mean()
 
     # closure groups must come from network inputs: era (21) and njets (19, >= 4 merged) by default
     feats_np = features.detach().cpu().numpy()
@@ -463,6 +479,7 @@ def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='st
     starts = [i for i in range(len(cells)) if i == 0 or cells[i][0] != cells[i - 1][0]] + [len(cells)]
     for s in starts[1:-1]:
         ax.axvline(s - 0.5, color='grey', linewidth=0.5)
+
     def describe(group):
         parts = []
         for col, value in zip(group_cols, group):
@@ -478,7 +495,9 @@ def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='st
         fontsize=14,
     )
     ax.set_xlabel(r'Groups quantile binned in increasing $\hat{r}$')
-    ax.set_ylabel(r'$\left[\sum w(\theta_0)\,\hat{r}(x;\theta_1) - \sum w(\theta_0) \,r(x,z;\theta_1)\right]\,/\,\sigma$')
+    ax.set_ylabel(
+        r'$\left[\sum w(\theta_0)\,\hat{r}(x;\theta_1) - \sum w(\theta_0) \,r(x,z;\theta_1)\right]\,/\,\sigma$'
+    )
     ax.legend()
     mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
     fig.savefig(f'{label}/group_closure.png', bbox_inches='tight')
@@ -849,7 +868,6 @@ def lr_calibration_difference(
     sumwlrdiff2, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor * (lr - lrhat) ** 2)
     sumw2lrdiff, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2 * (lr - lrhat))
     sumw2lrdiff2, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2 * (lr - lrhat) ** 2)
-    
 
     meanlr = sumwlr / sumw
     meanlrhat = sumwlrhat / sumw
@@ -882,11 +900,19 @@ def lr_calibration_difference(
 
     if include_stdv:
         ax.bar(qbins[:-1], stdv_width, bottom=stdv_down, width=(qbins[1:] - qbins[:-1]), **mean_stdv_formatting)
-    ax.plot([qbins[0], qbins[-1]], [0,0], color = 'grey', linestyle = ':', label = '_nolegend_')
-    ax.bar(qbins[:-1], err_width, bottom=err_down, width=(qbins[1:] - qbins[:-1]),  **mean_error_formatting)
+    ax.plot([qbins[0], qbins[-1]], [0, 0], color='grey', linestyle=':', label='_nolegend_')
+    ax.bar(qbins[:-1], err_width, bottom=err_down, width=(qbins[1:] - qbins[:-1]), **mean_error_formatting)
 
-    ax.bar(qbins[:-1], differ, width=(qbins[1:] - qbins[:-1]), label=r'$r - \hat{r}$', facecolor='none', edgecolor='k', align='edge', )
-    
+    ax.bar(
+        qbins[:-1],
+        differ,
+        width=(qbins[1:] - qbins[:-1]),
+        label=r'$r - \hat{r}$',
+        facecolor='none',
+        edgecolor='k',
+        align='edge',
+    )
+
     # ax.hist(meanlrhat, weights=differ, bins=qbins, histtype='step', color='k', label=r'$r - \hat{r}$')
 
     pulls = np.abs(differ) / mean_err
@@ -909,4 +935,4 @@ def lr_calibration_difference(
     ax.set_ylim([-y_max, y_max])
     ax.set_xlim([qbins[0], qbins[-1]])
 
-    return  pull, pull_err, ci_diff, ci_diff_err
+    return pull, pull_err, ci_diff, ci_diff_err

@@ -1,8 +1,10 @@
 import numpy as np
 import torch, tqdm
 
-def lumi_norm(s, lumi = 137.64, expected_sm=140983.03):
-    return s * expected_sm/(lumi * 1000 * s[0].sum())    
+
+def lumi_norm(s, lumi=137.64, expected_sm=140983.03):
+    return s * expected_sm / (lumi * 1000 * s[0].sum())
+
 
 def prepare_weights(
     data: torch.utils.data.TensorDataset,
@@ -113,8 +115,8 @@ def get_probabilities(coefs: torch.tensor, config: dict):
     """
     p0 = coefs @ get_lower_tri(config['c0'])
     p1 = coefs @ get_lower_tri(config['c1'])
-    p0 /= (p0.mean())
-    p1 /= (p1.mean())
+    p0 /= p0.mean()
+    p1 /= p1.mean()
     return p0, p1
 
 

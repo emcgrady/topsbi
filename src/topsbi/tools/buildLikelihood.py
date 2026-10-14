@@ -103,6 +103,7 @@ class ensemble:
         self,
         config: dict,
         features: torch.tensor,
+        hist_residuals: bool = False,
     ):
         """
         Average the per-event morphing coefficients of several seeds.
@@ -120,20 +121,19 @@ class ensemble:
         self.zeros_mask = None
         self.gammas = None
         self.gammas2 = None
+        self.residuals = []
         # events kept by every seed; an event dropped by any seed has no complete average
         self.infFilter = torch.ones(n_events, dtype=torch.bool)
         for seed in config['seeds'].keys():
             likelihood_config['sm'] = config['seeds'][seed]['sm']
             likelihood_config['networks'] = config['seeds'][seed]['networks']
-            n_nets = len(config['seeds'][seed]['networks']) + 1
-            total_nets += n_nets
             temp_likelihood = full_likelihood(likelihood_config, features)
             if hist_residuals:
                 bins = np.logspace(-10, 3, 200)
                 self.residuals += [np.histogram(temp_likelihood.residuals, bins=bins)]
             if self.zeros_mask is None:
                 self.zeros_mask = temp_likelihood.zerosMask
-                self.gammas  = torch.zeros((int(self.zeros_mask.sum()), n_events), dtype=temp_likelihood.gammas.dtype)
+                self.gammas = torch.zeros((int(self.zeros_mask.sum()), n_events), dtype=temp_likelihood.gammas.dtype)
                 self.gammas2 = torch.zeros((int(self.zeros_mask.sum()), n_events), dtype=temp_likelihood.gammas.dtype)
             elif not torch.equal(self.zeros_mask, temp_likelihood.zerosMask):
                 raise ValueError(f'seed {seed} was trained at a different set of WC points than the other seeds')
@@ -143,7 +143,6 @@ class ensemble:
             self.infFilter &= temp_likelihood.infFilter
         self.gammas = self.gammas[:, self.infFilter] / len(config['seeds'])
         self.gammas2 = self.gammas2[:, self.infFilter] / len(config['seeds'])
-        
 
     def __call__(self, coefs: list):
         return get_lower_tri(coefs)[self.zeros_mask] @ self.gammas
