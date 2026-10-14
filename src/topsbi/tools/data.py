@@ -1,6 +1,9 @@
 import numpy as np
 import torch, tqdm
 
+def lumi_norm(s, lumi = 137.64, expected_sm=140983.03):
+    return s * expected_sm/(lumi * 1000 * s[0].sum())    
+
 def prepare_weights(
     data: torch.utils.data.TensorDataset,
     config: dict,
