@@ -1,5 +1,5 @@
 from topsbi.tools.buildLikelihood import full_likelihood, likelihood
-from topsbi.tools.data import expand_array, get_probabilities
+from topsbi.tools.data import get_lower_tri, get_probabilities
 from topsbi.tools.plots import hist2d, kinematic_ratio_plot, lrMeanPlot
 
 import matplotlib.pyplot as plt
@@ -17,7 +17,7 @@ def main(parametric, dedicated, output):
     with open(config['features'], 'r') as f:
         config['features'] = yaml.safe_load(f)
 
-    features, coefficients = torch.load(config['data'], weights_only=False)[:]
+    features, coefficients, _ = torch.load(config['data'], weights_only=False)[:]
 
     plr = full_likelihood(config, features)
     features = features[plr.infFilter]
