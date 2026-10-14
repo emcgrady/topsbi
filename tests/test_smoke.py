@@ -13,10 +13,7 @@ MODULES = [
     'topsbi.tools.metrics',
     'topsbi.tools.plots',
     'topsbi.train',
-    pytest.param(
-        'topsbi.validation',
-        marks=pytest.mark.xfail(reason='imports removed expand_array, see emcgrady/topsbi#5', strict=True),
-    ),
+    'topsbi.validation',
 ]
 
 
@@ -54,14 +51,14 @@ def test_get_weights_stitched():
     years = torch.randint(0, 4, (50,), generator=gen).float()
     c1 = [1.0] + [0.0] * N_WCS
     c1[4] = 0.1
-    config = {'c0': [1.0] + [0.0] * N_WCS, 'c1': c1, 'cg': CG, 'lumi': [19.52, 16.81, 41.48, 59.83]}
+    config = {'c0': [1.0] + [0.0] * N_WCS, 'c1': c1, 'cg': CG, 'lumi': [19.52, 16.81, 41.48, 59.83], 'device': 'cpu'}
 
-    w0, w1, wg = get_weights(coefs, config, years)
+    w0, w1 = get_weights(coefs, config, years)
 
     lumi = torch.tensor(config['lumi'], dtype=torch.float64)[years.long()]
-    for w, c in [(w0, config['c0']), (w1, c1), (wg, CG)]:
+    for w, c in [(w0, config['c0']), (w1, c1)]:
         assert w.dtype == torch.float32
-        torch.testing.assert_close(w.double(), lumi * (coefs @ get_lower_tri(c, dtype=torch.float64)), rtol=1e-6, atol=0)
+        torch.testing.assert_close(w.double(), lumi * (coefs @ get_lower_tri(c, dtype=torch.float64)) * 1000, rtol=1e-6, atol=0)
 
     with pytest.raises(KeyError):
         get_weights(coefs, {k: v for k, v in config.items() if k != 'lumi'}, years)
