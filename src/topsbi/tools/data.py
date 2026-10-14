@@ -54,7 +54,6 @@ def parameterize_weights(coefs: torch.tensor, config: dict):
         p1:  event probabilits under randomized c1 from config ranges
         wcs: random WC values used to calculate p1
     """
-    coefs /= (coefs @ get_lower_tri(config['cg'])).mean()
     wcs = [torch.ones(coefs.shape[0])]
     # choose random WC values
     for wc in config['wcs']:
@@ -79,28 +78,22 @@ def get_weights(coefs: torch.tensor, config: dict, years: torch.tensor):
     return stitched event weights w^s under the hypotheses in the passed config file.
 
     The stored structure constants already carry xsec/nSumOfWeights and the detector
-    scale factors, but not the luminosity, so w^s(c) = L_y * coefs @ T(c).
+    scale factors, but not the luminosity, so w^s(c) = L_y * coefs @ T(c) (Note: pb to fb conversion of lumi)
 
     Args:
         coefs: torch tensor whose rows represent each event and whose columns are the structure constants for the expanded quadratic
-        config: dictionary containing lists of WC values at c0, c1, and cg, and the per-era luminosities in lumi
+        config: dictionary containing lists of WC values at c0 and c1, and the per-era luminosities in lumi
         years: era index (year_int feature) of each event, used to look up the luminosity
     Returns:
         w0: stitched event weight under c0
         w1: stitched event weight under c1
-        wg: stitched event weight under cg
     """
     if 'lumi' not in config:
         raise KeyError("weights_only requires 'lumi': a list of luminosities indexed by the year_int feature")
-    # compute in double precision, the quadratic terms can cancel far from cg
     coefs = coefs.to(torch.float64)
     lumi = torch.tensor(config['lumi'], dtype=torch.float64, device=config['device'])[years.long()]
     w0 = lumi * (coefs @ get_lower_tri(config['c0'], dtype=torch.float64).to(config['device'])) * 1000
     w1 = lumi * (coefs @ get_lower_tri(config['c1'], dtype=torch.float64).to(config['device'])) * 1000
-    if config['cg'] is not None:
-        wg = lumi * (coefs @ get_lower_tri(config['cg'], dtype=torch.float64).to(config['device'])) * 1000
-        w0 /= wg
-        w1 /= wg
     return (w0).to(torch.float32), (w1).to(torch.float32)
 
 
@@ -134,7 +127,7 @@ def get_feature_normalization(features: torch.tensor):
     return features.mean(0), features.std(0)
 
 
-def sample_boostrap(sample, seed):
+def sample_boostrap(sample: torch.utils.data.TensorDataset, seed: int):
     """
     Splits and shuffles data into training and testing
     """
