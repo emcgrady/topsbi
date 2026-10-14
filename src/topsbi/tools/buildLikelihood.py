@@ -103,28 +103,41 @@ class ensemble:
         config: dict,
         features: torch.tensor,
     ):
-        self.gammas = []
-        likelihood_config = {}
-        likelihood_config['device'] = config['device']
-        likelihood_config['c0'] = config['c0']
-        likelihood_config['cg'] = config['cg']
-        likelihood_config['features'] = config['features']
+        """
+        Average the per-event morphing coefficients of several seeds.
 
-        n_wcs = len(likelihood_config['c0']) - 1
-
-        n_expanded = int(((n_wcs + 1) * (n_wcs + 2)) / 2)
+        Args:
+            config: dictionary with the shared settings and, per seed, the sm and dedicated network configs
+            features: non-normalized features to be evaluated by the networks
+        """
+        likelihood_config = {
+            'device': config['device'],
+            'c0': config['c0'],
+            'features': config['features'],
+        }
         n_events = int(features.shape[0])
-        self.gammas = torch.zeros((n_expanded, n_events))
         self.zeros_mask = None
+        self.gammas = None
+        self.gammas2 = None
+        # events kept by every seed; an event dropped by any seed has no complete average
+        self.infFilter = torch.ones(n_events, dtype=torch.bool)
         for seed in config['seeds'].keys():
             likelihood_config['sm'] = config['seeds'][seed]['sm']
             likelihood_config['networks'] = config['seeds'][seed]['networks']
             temp_likelihood = full_likelihood(likelihood_config, features)
             if self.zeros_mask is None:
                 self.zeros_mask = temp_likelihood.zerosMask
-                self.gammas = self.gammas[self.zeros_mask]
-            self.gammas += temp_likelihood.gammas
-        self.gammas.divide(len(config['seeds']))
+                self.gammas  = torch.zeros((int(self.zeros_mask.sum()), n_events), dtype=temp_likelihood.gammas.dtype)
+                self.gammas2 = torch.zeros((int(self.zeros_mask.sum()), n_events), dtype=temp_likelihood.gammas.dtype)
+            elif not torch.equal(self.zeros_mask, temp_likelihood.zerosMask):
+                raise ValueError(f'seed {seed} was trained at a different set of WC points than the other seeds')
+            # place each seed's coefficients at their own event indices
+            self.gammas[:, temp_likelihood.infFilter] += temp_likelihood.gammas
+            self.gammas2[:, temp_likelihood.infFilter] += temp_likelihood.gammas**2
+            self.infFilter &= temp_likelihood.infFilter
+        self.gammas = self.gammas[:, self.infFilter] / len(config['seeds'])
+        self.gammas2 = self.gammas2[:, self.infFilter] / len(config['seeds'])
+        
 
     def __call__(self, coefs: list):
         return get_lower_tri(coefs)[self.zeros_mask] @ self.gammas

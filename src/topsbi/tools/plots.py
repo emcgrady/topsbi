@@ -1,6 +1,6 @@
 from matplotlib.axes import Axes
 from matplotlib.animation import FuncAnimation, PillowWriter
-from topsbi.tools.metrics import netEval
+from topsbi.tools.metrics import netEval, group_closure
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -34,34 +34,86 @@ def animate_plots(plots, outname, fps=5):
     anim.save(outname, writer=PillowWriter(fps=fps))
     plt.close(fig)
 
+def merge_sparse_bins(x: np.array, weights: np.array, edges: np.array, min_neff: float = 30):
+    '''
+    Merge neighbouring bins until each holds at least min_neff effective events.
+
+    Bins are accumulated from the left; a remainder at the right edge that is still below
+    min_neff is folded into the last complete bin, so the tail ends up in one wide bin.
+
+    Args:
+        x: values of the binned variable
+        weights: event weights used to count effective events, n_eff = (sum w)^2 / sum w^2
+        edges: initial (fine) bin edges
+        min_neff: minimum effective number of events per merged bin
+    Returns:
+        merged bin edges
+    '''
+    sumw, _ = np.histogram(x, bins=edges, weights=weights)
+    sumw2, _ = np.histogram(x, bins=edges, weights=weights**2)
+    merged = [edges[0]]
+    acc, acc2 = 0.0, 0.0
+    for i in range(len(sumw)):
+        acc += sumw[i]
+        acc2 += sumw2[i]
+        if acc2 > 0 and acc**2 / acc2 >= min_neff:
+            merged.append(edges[i + 1])
+            acc, acc2 = 0.0, 0.0
+    if merged[-1] != edges[-1]:
+        if len(merged) > 1:
+            merged[-1] = edges[-1]
+        else:
+            merged.append(edges[-1])
+    return np.array(merged)
+
 
 def kinematic_histogram(
-    x, params, epoch, learned_lr, true_lr, outname, ylim=None, epoch_title=True, x2=None, log=True, scale_ratio=False
+    x: np.array,
+    params: dict,
+    epoch: int,
+    learned_lr: np.array,
+    true_lr: np.array,
+    outname: str,
+    ylim: list = None,
+    epoch_title: bool = True,
+    log: bool = True,
+    scale_ratio: bool = False,
+    min_neff: float = 30,
+    include_overflow: bool = True,
 ):
     '''
     Histogram of learned and true likelihood ratio as a function of a kinematic variable.
+
+    The regular binning from params is merged in sparse regions so that every bin has at least
+    min_neff effective events, and the main panel shows yields per unit of the variable.
 
     Args:
         x: Kinematic to be plotted
         params: dictionary containing plotting information
         epoch: epoch number for plot title
-        learned_lr: learned likelihood ratio for each event
-        true_lr: true likelihood ratio for each event
+        learned_lr: learned likelihood ratio for each event (times the theta_0 weight)
+        true_lr: true likelihood ratio for each event (times the theta_0 weight)
         outname: name for saving the plot
+        min_neff: minimum effective number of events per bin
+        include_overflow: put events outside [min, max] into the first and last bins
     '''
-    learned = hist.Hist(
-        hist.axis.Regular(
-            name='learned', label=params['label'], bins=params['nbins'], start=params['min'], stop=params['max']
-        )
-    )
-    correct = hist.Hist(
-        hist.axis.Regular(
-            name='correct', label=params['label'], bins=params['nbins'], start=params['min'], stop=params['max']
-        )
-    )
+    x = np.asarray(x, dtype=np.float64)
+    learned_lr = np.asarray(learned_lr, dtype=np.float64)
+    true_lr = np.asarray(true_lr, dtype=np.float64)
+    fine = np.linspace(params['min'], params['max'], params['nbins'] + 1)
+    if include_overflow:
+        # keep the tails in the test: clip into the outermost bins
+        x = np.clip(x, fine[0], np.nextafter(fine[-1], fine[0]))
+    bins = merge_sparse_bins(x, true_lr, fine, min_neff)
+    widths = np.diff(bins)
 
-    learned.fill(x, weight=learned_lr)
-    correct.fill(x, weight=true_lr)
+    n_learned, _ = np.histogram(x, bins=bins, weights=learned_lr)
+    n_correct, _ = np.histogram(x, bins=bins, weights=true_lr)
+    sum_ll, _ = np.histogram(x, bins=bins, weights=learned_lr**2)
+    sum_cc, _ = np.histogram(x, bins=bins, weights=true_lr**2)
+    sum_lc, _ = np.histogram(x, bins=bins, weights=learned_lr * true_lr)
+    lErr = np.sqrt(sum_ll)
+    cErr = np.sqrt(sum_cc)
 
     mh.style.use("CMS")
     ax = []
@@ -74,39 +126,37 @@ def kinematic_histogram(
     else:
         mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax[0])
 
-    n_learned, bins = learned.to_numpy()
-    n_correct, _ = correct.to_numpy()
-
-    lErr = []
-    cErr = []
-    for i in range(params['nbins']):
-        lErr.append((learned_lr[(x > bins[i]) & (x < bins[i + 1])] ** 2).sum())
-        cErr.append((true_lr[(x > bins[i]) & (x < bins[i + 1])] ** 2).sum())
-    lErr = np.sqrt(lErr)
-    cErr = np.sqrt(cErr)
-
-    correct.plot1d(ax=ax[0], yerr=cErr, label=r'$\hat{r}\,(x;\theta_1,\theta_0)$')
-    learned.plot1d(ax=ax[0], yerr=lErr, linestyle='dashdot', label=r'$r\,(x,z;\theta_1,\theta_0)$')
-
-    ratio = np.divide(n_learned, n_correct, where=(n_correct > 0), out=np.zeros(n_learned.shape))
-    rErr = ratio * np.sqrt(
-        np.divide(lErr, n_learned, where=(n_learned > 0), out=np.zeros(lErr.shape)) ** 2
-        + np.divide(cErr, n_correct, where=(n_correct > 0), out=np.zeros(n_correct.shape)) ** 2
+    # bins have different widths, so show yields per unit of the variable
+    mh.histplot(n_correct / widths, bins, yerr=cErr / widths, ax=ax[0], label=r'$r\,(x,z;\theta_1,\theta_0)$')
+    mh.histplot(
+        n_learned / widths, bins, yerr=lErr / widths, ax=ax[0], linestyle='dashdot', label=r'$\hat{r}\,(x;\theta_1,\theta_0)$'
     )
 
-    ax[1].plot((bins[:-1] + bins[1:]) / 2, ratio, '.k')
-    ax[1].errorbar((bins[:-1] + bins[1:]) / 2, ratio, yerr=rErr, fmt='none', color='k')
+    ratio = np.divide(n_learned, n_correct, where=(n_correct > 0), out=np.zeros(n_learned.shape))
+    rVar = np.maximum(sum_ll - 2 * ratio * sum_lc + ratio**2 * sum_cc, 0)
+    rErr = np.divide(np.sqrt(rVar), n_correct, where=(n_correct > 0), out=np.zeros(n_learned.shape))
+
+    # merging leaves sparse bins only when the whole variable has too few effective events
+    n_eff = np.divide(n_correct**2, sum_cc, where=(sum_cc > 0), out=np.zeros(n_correct.shape))
+    sparce = n_eff < min_neff
+    ratio[sparce] = np.nan
+    rErr[sparce] = np.nan
+
+    centers = (bins[:-1] + bins[1:]) / 2
+    ax[1].errorbar(centers, ratio, xerr=widths / 2, yerr=rErr, fmt='.k')
     ax[1].hlines(1, bins[0], bins[-1], color='k', linestyle='dashed', alpha=0.5)
-    if scale_ratio:
-        bin_mask = n_correct >= 1
+    if scale_ratio and (~sparce).any():
+        bin_mask = ~sparce
         err_max = np.array([((ratio + rErr - 1)[bin_mask]).max(), ((1 - ratio + rErr)[bin_mask]).max()]).max() * 1.05
         ax[1].set_ylim([1 - err_max, 1 + err_max])
     else:
         ax[1].set_ylim(0, 2)
     ax[0].set_xlabel('')
+    unit = params.get('unit')
+    ax[0].set_ylabel(f'Weighted events / {unit}' if unit else 'Weighted events / bin width')
     ax[0].set_xlim(bins[0], bins[-1])
     plt.setp(ax[0].get_xticklabels(), visible=False)
-    ax[1].set_xlabel(params['label'])
+    ax[1].set_xlabel(f'{params.get('label')} {unit}' if unit else params.get('label'))
     ax[1].set_ylabel(r'$\frac{\hat{r}(x;\theta_1,\theta_0)}{r(x,z;\theta_1,\theta_0)}$')
     ax[0].legend()
     if log:
@@ -267,7 +317,10 @@ def lr_curve(
     ax.set_ylabel('Learning Rate')
 
 
-def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='stitched', lr_history=None):
+def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='stitched', lr_history=None,
+                 group_cols=(21, 19), group_caps={19: 4},
+                 group_labels={21: ('', {0: '2016APV', 1: '2016', 2: '2017', 3: '2018'}),
+                               19: ('jets', {4: '≥4'})}):
     mh.style.use("CMS")
     os.makedirs(f'{label}', mode=0o755, exist_ok=True)
     torch.save(net.state_dict(), f'{label}/model.pt')
@@ -289,7 +342,15 @@ def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='st
         lrhat = np.exp(f)
 
     lr = p1 / p0
-    lr_norm_factor = np.ones(lr.shape)
+    lr_norm_factor = p0/p0.mean()
+
+    # closure groups must come from network inputs: era (21) and njets (19, >= 4 merged) by default
+    feats_np = features.detach().cpu().numpy()
+    groups = np.column_stack(
+        [np.minimum(feats_np[:, c], group_caps[c]) if c in group_caps else feats_np[:, c] for c in group_cols]
+    )
+    if method != 'weight_shift':
+        groups = groups[noOnes]
 
     # loss curves
     fig, ax = plt.subplots()
@@ -312,7 +373,7 @@ def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='st
     # get network performance metrics
     fpr, tpr, auc = netEval(f, p0, p1)
 
-    performance['auc'] = auc
+    performance['auc'] = round(auc, 5)
 
     # make ROC curves
     fig, ax = plt.subplots()
@@ -327,21 +388,6 @@ def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='st
     plt.close()
 
     # lr calibration difference
-    fig, ax = plt.subplots()
-    lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20)
-    ax.legend()
-    fig.savefig(f'{label}/mean_diff_excl.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
-
-    fig, ax = plt.subplots()
-    lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20, threshold=0.0)
-    ax.legend()
-    ax.set_xscale('log')
-    fig.savefig(f'{label}/mean_diff_incl.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
-
     fig, ax = plt.subplots()
     lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20, include_stdv=True)
     ax.legend()
@@ -358,60 +404,84 @@ def networkPlots(features, p0, p1, net, train_loss, test_loss, label, method='st
     plt.close()
 
     fig, ax = plt.subplots()
-    delta_sig_excl, ci_ratio_excl = lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 1000)
+    lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20)
     ax.legend()
-    fig.savefig(f'{label}/hibin_mean_diff_excl.png', bbox_inches='tight')
+    fig.savefig(f'{label}/mean_diff_excl.png', bbox_inches='tight')
     plt.clf()
     plt.close()
-
-    performance['delta_sig_excl'] = delta_sig_excl
-    performance['ci_ratio_excl'] = ci_ratio_excl
 
     fig, ax = plt.subplots()
-    delta_sig_incl, ci_ratio_incl = lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 1000, threshold=0.0)
+    lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20, threshold=0.0)
     ax.legend()
     ax.set_xscale('log')
-    fig.savefig(f'{label}/hibin_mean_diff_incl.png', bbox_inches='tight')
+    fig.savefig(f'{label}/mean_diff_incl.png', bbox_inches='tight')
     plt.clf()
     plt.close()
 
-    performance['delta_sig_incl'] = delta_sig_incl
-    performance['ci_ratio_incl'] = ci_ratio_incl
+    # get metrics with higher bins
+    fig, ax = plt.subplots()
+    pull, pull_err, ci_diff, ci_diff_err = lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 50, threshold=0.0)
+    plt.clf()
+    plt.close()
+
+    performance['pull'] = round(pull, 5)
+    performance['pull_err'] = round(pull_err, 5)
+    performance['ci_diff'] = [round(v, 5) for v in ci_diff]
+    performance['ci_diff_err'] = [round(v, 5) for v in ci_diff_err]
 
     # lr calibration curves
     fig, ax = plt.subplots()
-    performance['chi_excl'] = lr_calibration_curve(ax, lr, lrhat, lr_norm_factor, 1000)
-    fig.savefig(f'{label}/lr_excl.png')
+    lr_calibration_curve(ax, lr, lrhat, lr_norm_factor, 50)
+    fig.savefig(f'{label}/lr_excl.png', bbox_inches='tight')
     ax.set_xscale('log')
     ax.set_yscale('log')
-    fig.savefig(f'{label}/lrExclLog.png', bbox_inches='tight')
+    fig.savefig(f'{label}/lr_excl_log.png', bbox_inches='tight')
     plt.clf()
     plt.close()
 
     fig, ax = plt.subplots()
-    performance['chi_incl'] = lr_calibration_curve(ax, lr, lrhat, lr_norm_factor, 1000, threshold=0.0)
-    fig.savefig(f'{label}/lrIncl.png', bbox_inches='tight')
+    performance['rms_bias'] = round(lr_calibration_curve(ax, lr, lrhat, lr_norm_factor, 50, threshold=0.0), 5)
+    fig.savefig(f'{label}/lr_incl.png', bbox_inches='tight')
     ax.set_xscale('log')
     ax.set_yscale('log')
     fig.savefig(f'{label}/lr_incl_log.png', bbox_inches='tight')
     plt.clf()
     plt.close()
 
-    fig, ax = plt.subplots()
-    lr_calibration_curve(ax, lr, lrhat, lr_norm_factor, 50)
-    fig.savefig(f'{label}/lr_excl_lobin.png', bbox_inches='tight')
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    fig.savefig(f'{label}/lr_excl_log_lobin.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
+    # group closure test
+    closure = group_closure(lrhat, lr, lr_norm_factor, groups)
+    performance['group_chi2_excess'] = round(closure['chi2_excess'], 5)
+    performance['group_chi2_excess_err'] = round(closure['chi2_excess_err'], 5)
+    performance['group_rms_bias'] = round(closure['rms_bias'], 5)
+    performance['group_worst_pull'] = round(closure['worst_pull'], 3)
 
     fig, ax = plt.subplots()
-    lr_calibration_curve(ax, lr, lrhat, lr_norm_factor, 50, threshold=0.0)
-    fig.savefig(f'{label}/lr_incl_lobin.png', bbox_inches='tight')
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    fig.savefig(f'{label}/lr_incl_log_lobin.png', bbox_inches='tight')
+    ax.axhspan(-2, 2, color='#E6EEE6', label=r'$\pm 2\sigma$')
+    ax.axhspan(-1, 1, color='#4086B8', alpha=0.6, label=r'$\pm 1\sigma$')
+    ax.plot(closure['pulls'], '.k')
+    cells = closure['cells']
+    starts = [i for i in range(len(cells)) if i == 0 or cells[i][0] != cells[i - 1][0]] + [len(cells)]
+    for s in starts[1:-1]:
+        ax.axvline(s - 0.5, color='grey', linewidth=0.5)
+    def describe(group):
+        parts = []
+        for col, value in zip(group_cols, group):
+            name, names = group_labels.get(col, (str(col), {}))
+            text = names.get(int(value), str(int(value)))
+            parts.append(f'{text} {name}'.strip())
+        return '\n'.join(parts)
+
+    ax.set_xticks(
+        [(a + b - 1) / 2 for a, b in zip(starts[:-1], starts[1:])],
+        [describe(cells[s][0]) for s in starts[:-1]],
+        rotation=90,
+        fontsize=14,
+    )
+    ax.set_xlabel(r'Groups quantile binned in increasing $\hat{r}$')
+    ax.set_ylabel(r'$\left[\sum w(\theta_0)\,\hat{r}(x;\theta_1) - \sum w(\theta_0) \,r(x,z;\theta_1)\right]\,/\,\sigma$')
+    ax.legend()
+    mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
+    fig.savefig(f'{label}/group_closure.png', bbox_inches='tight')
     plt.clf()
     plt.close()
 
@@ -625,16 +695,19 @@ def lr_calibration_curve(
 
     ax.errorbar(xcenter, mean, xerr=xerr, yerr=err_mean, fmt='.')
 
-    chi_square = (xcenter - mean) ** 2 / mean
-    chi_square = chi_square[~np.isnan(chi_square)]
-    chi_square = (chi_square.sum()).item()
+    rel = (xcenter - mean) / mean
+    rel_err = err_mean / mean
+    ok = np.isfinite(rel) & np.isfinite(rel_err)
+    wk = sumw[ok] / sumw[ok].sum()
+    # remove the statistical scatter a perfect model would show
+    rms_bias = np.sqrt(max((wk * rel[ok] ** 2).sum() - (wk * rel_err[ok] ** 2).sum(), 0)).item()
 
     ax.plot([qbins[0], qbins[-1]], [qbins[0], qbins[-1]], color='grey', linestyle='--', label='_nolegend_')
     mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
     ax.set_xlabel(r'$\left\langle\hat{{r}}\,(x;\theta_1,\theta_0)\right\rangle$')
     ax.set_ylabel(r'$\left\langle{r}\,(x,z;\theta_1,\theta_0)\right\rangle$')
 
-    return chi_square
+    return rms_bias
 
 
 def kinematic_shift_histogram(
@@ -773,8 +846,10 @@ def lr_calibration_difference(
     sumw2, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2)
     sumwlrhat, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor * lrhat)
     sumwlrdiff, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor * (lr - lrhat))
+    sumwlrdiff2, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor * (lr - lrhat) ** 2)
     sumw2lrdiff, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2 * (lr - lrhat))
     sumw2lrdiff2, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2 * (lr - lrhat) ** 2)
+    
 
     meanlr = sumwlr / sumw
     meanlrhat = sumwlrhat / sumw
@@ -784,7 +859,7 @@ def lr_calibration_difference(
     err_width = 2 * mean_err
     err_down = (meanlr - meanlrhat) - mean_err
 
-    mean_stdv = mean_err * np.sqrt(sumw2)
+    mean_stdv = np.sqrt(np.maximum(sumwlrdiff2 / sumw - meanlrdiff**2, 0))
     stdv_width = 2 * mean_stdv
     stdv_down = (meanlr - meanlrhat) - mean_stdv
 
@@ -812,15 +887,16 @@ def lr_calibration_difference(
 
     ax.hist(meanlrhat, weights=differ, bins=qbins, histtype='step', color='k', label=r'$r - \hat{r}$')
 
-    sign = np.sign(differ)
-    delta_sig = []
-    ci_ratio = []
-    for sigma in range(1, 4):
-        pos = (differ + sigma * mean_err) * sign
-        neg = (differ - sigma * mean_err) * sign
-        temp_sig = (np.vstack((pos, neg)) / mean_err).min(0)
-        delta_sig += [temp_sig.mean().item()]
-        ci_ratio += [(temp_sig < 0).mean().item()]
+    pulls = np.abs(differ) / mean_err
+    pulls = pulls[np.isfinite(pulls)]
+    n = len(pulls)
+    # for a perfectly calibrated model the pulls are standard normal: E|Z| = sqrt(2/pi), Var|Z| = 1 - 2/pi
+    pull = (pulls.mean() - np.sqrt(2 / np.pi)).item()
+    pull_err = np.sqrt((1 - 2 / np.pi) / n).item()
+    expected = [0.6827, 0.9545, 0.9973]
+    ci_diff = [(e - (pulls < s).mean()).item() for s, e in zip(range(1, 4), expected)]
+    # binomial scatter of the fraction of bins inside each interval
+    ci_diff_err = [np.sqrt(e * (1 - e) / n).item() for e in expected]
 
     mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
     ax.set_xlabel(r'$\left\langle\hat{r}\,(x;\theta_1,\theta_0)\right\rangle$')
@@ -831,4 +907,4 @@ def lr_calibration_difference(
     ax.set_ylim([-y_max, y_max])
     ax.set_xlim([qbins[0], qbins[-1]])
 
-    return delta_sig, ci_ratio
+    return  pull, pull_err, ci_diff, ci_diff_err

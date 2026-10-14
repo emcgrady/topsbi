@@ -25,25 +25,23 @@ def main(config):
         train, test = sample_boostrap(torch.load(f'{config["data"]}/train.p', weights_only=False, map_location=config['device']), config['seed'])
 
     else:
-        test = torch.load(f'{config["data"]}/test.p', weights_only=False).to(config['device'])
-        train = torch.load(f'{config["data"]}/train.p', weights_only=False).to(config['device'])
+        test = torch.load(f'{config["data"]}/test.p', weights_only=False, map_location=config['device'])
+        train = torch.load(f'{config["data"]}/train.p', weights_only=False, map_location=config['device'])
 
     train_feats, train_w0, train_w1 = prepare_weights(train, config)
     test_feats, test_w0, test_w1 = prepare_weights(test, config)
     train = None; test = None
 
-    print(config['mean_norm'])
-    if 'mean_norm' not in config.keys():
-        config['mean_norm'] = False
-    if config['mean_norm']:
-        print('in conditional')
-        w_norm = train_w0.mean()
-        train_w0 /= w_norm
-        train_w1 /= w_norm
-        test_w0 /= w_norm
-        test_w1 /= w_norm
+    w_norm = train_w0.mean()
+    train_w0 /= w_norm
+    train_w1 /= w_norm
+    test_w0 /= w_norm
+    test_w1 /= w_norm
 
     tlr = (test_w1 / test_w0).detach().cpu().numpy().flatten()
+    w0_np = test_w0.detach().cpu().numpy().flatten()
+    w1_np = test_w1.detach().cpu().numpy().flatten()
+
 
     batches = torch.utils.data.DataLoader(
         torch.utils.data.TensorDataset(train_feats, train_w0, train_w1),
@@ -128,16 +126,16 @@ def main(config):
                     test_feats[noOnes, params['loc']].cpu().numpy(),
                     params,
                     epoch,
-                    lr,
-                    tlr[noOnes],
+                    lr * w0_np[noOnes],
+                    w1_np[noOnes],
                     f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_log.png',
                 )
                 features_config[feature]['ylim_linear'] = kinematic_histogram(
                     test_feats[noOnes, params['loc']].cpu().numpy(),
                     params,
                     epoch,
-                    lr,
-                    tlr[noOnes],
+                    lr * w0_np[noOnes],
+                    w1_np[noOnes],
                     f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_linear.png',
                     log=False,
                 )
@@ -146,8 +144,8 @@ def main(config):
                     test_feats[noOnes, params['loc']].cpu().numpy(),
                     params,
                     epoch,
-                    lr,
-                    tlr[noOnes],
+                    lr * w0_np[noOnes],
+                    w1_np[noOnes],
                     f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_log.png',
                     ylim=params['ylim_log'],
                 )
@@ -155,8 +153,8 @@ def main(config):
                     test_feats[noOnes, params['loc']].cpu().numpy(),
                     params,
                     epoch,
-                    lr,
-                    tlr[noOnes],
+                    lr * w0_np[noOnes],
+                    w1_np[noOnes],
                     f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_linear.png',
                     ylim=params['ylim_linear'],
                     log=False,
@@ -219,8 +217,8 @@ def main(config):
             test_feats[noOnes, params['loc']].cpu().numpy(),
             params,
             epoch,
-            lr,
-            tlr[noOnes],
+            lr * w0_np[noOnes],
+            w1_np[noOnes],
             f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_log.png',
             ylim=params['ylim_log'],
         )
@@ -228,8 +226,8 @@ def main(config):
             test_feats[noOnes, params['loc']].cpu().numpy(),
             params,
             epoch,
-            lr,
-            tlr[noOnes],
+            lr * w0_np[noOnes],
+            w1_np[noOnes],
             f'{config["name"]}/incomplete/kinematics/{feature}/{epoch:04d}_linear.png',
             ylim=params['ylim_linear'],
             log=False,
@@ -253,10 +251,24 @@ def main(config):
     # keep the best model for validation
     torch.save(model.net.state_dict(), f'{config["name"]}/model.pt')
 
+    # final metrics on data not used for training, early stopping or the scheduler
+    if config.get('holdout'):
+        holdout = torch.load(config['holdout'], weights_only=False, map_location=config['device'])
+        eval_feats, eval_w0, eval_w1 = prepare_weights(holdout, config)
+        holdout = None
+        eval_w0 /= w_norm
+        eval_w1 /= w_norm
+        print(f"[INFO] final metrics on holdout {config['holdout']} ({eval_feats.shape[0]} events)")
+    else:
+        eval_feats, eval_w0, eval_w1 = test_feats, test_w0, test_w1
+        print("[WARNING] no holdout given: final metrics use the early-stopping test split and are optimistic")
+    eval_w0_np = eval_w0.detach().cpu().numpy().flatten()
+    eval_w1_np = eval_w1.detach().cpu().numpy().flatten()
+
     networkPlots(
-        test_feats,
-        test_w0,
-        test_w1,
+        eval_feats,
+        eval_w0,
+        eval_w1,
         model.net,
         trainLoss,
         testLoss,
@@ -264,11 +276,11 @@ def main(config):
         method=config['method'],
         lr_history=lrHistory,
     )
-    f = model.net(test_feats).cpu().detach().numpy().flatten()
+    f = model.net(eval_feats).cpu().detach().numpy().flatten()
 
     if config['method'] == 'weight_shift':
         lr = np.exp(2 * f - 1)
-        noOnes = np.ones(tlr.shape, dtype=bool)
+        noOnes = np.ones(f.shape, dtype=bool)
     else:
         noOnes = f != 1
         f = f[noOnes]
@@ -276,21 +288,21 @@ def main(config):
 
     for feature, params in features_config.items():
         kinematic_histogram(
-            test_feats[noOnes, params['loc']].cpu().numpy(),
+            eval_feats[noOnes, params['loc']].cpu().numpy(),
             params,
             epoch,
-            lr,
-            tlr[noOnes],
+            lr * eval_w0_np[noOnes],
+            eval_w1_np[noOnes],
             f'{config["name"]}/complete/kinematics/{feature}_log.png',
             epoch_title=False,
             scale_ratio=True,
         )
         kinematic_histogram(
-            test_feats[noOnes, params['loc']].cpu().numpy(),
+            eval_feats[noOnes, params['loc']].cpu().numpy(),
             params,
             epoch,
-            lr,
-            tlr[noOnes],
+            lr * eval_w0_np[noOnes],
+            eval_w1_np[noOnes],
             f'{config["name"]}/complete/kinematics/{feature}_linear.png',
             log=False,
             epoch_title=False,
