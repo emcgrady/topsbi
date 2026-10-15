@@ -10,6 +10,8 @@ import argparse, glob, os, tqdm, torch, yaml
 import numpy as np
 
 
+# gradients only inside the optimizer loop; evaluating the full training set with autograd costs ~10 GB
+@torch.no_grad()
 def main(config):
     with open(config['features'], 'r') as f:
         features_config = yaml.safe_load(f)
@@ -45,11 +47,14 @@ def main(config):
     w0_np = test_w0.detach().cpu().numpy().flatten()
     w1_np = test_w1.detach().cpu().numpy().flatten()
 
+    # tensors may live on the GPU, so no worker processes; one fancy-index per batch instead of per-event __getitem__
+    train_ds = torch.utils.data.TensorDataset(train_feats, train_w0, train_w1)
     batches = torch.utils.data.DataLoader(
-        torch.utils.data.TensorDataset(train_feats, train_w0, train_w1),
-        batch_size=config['batchSize'],
-        shuffle=True,
-        num_workers=1,
+        train_ds,
+        batch_size=None,
+        sampler=torch.utils.data.BatchSampler(
+            torch.utils.data.RandomSampler(train_ds), batch_size=config['batchSize'], drop_last=False
+        ),
     )
     model = Model(
         nFeatures=train_feats.shape[1],
@@ -178,11 +183,12 @@ def main(config):
                 lr_history=lrHistory,
             )
         model.net.train()
-        for x, w0, w1 in batches:
-            optimizer.zero_grad()
-            loss = model.loss(x, w0, w1)
-            loss.backward()
-            optimizer.step()
+        with torch.enable_grad():
+            for x, w0, w1 in batches:
+                optimizer.zero_grad()
+                loss = model.loss(x, w0, w1)
+                loss.backward()
+                optimizer.step()
         model.net.eval()
         # both losses after this epoch's updates, so trainLoss[i] and testLoss[i] are the same network state
         trainLoss.append(model.loss(train_feats, train_w0, train_w1).item())
