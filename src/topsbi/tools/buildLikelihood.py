@@ -28,6 +28,7 @@ class likelihood:
         self.model.load_state_dict(
             torch.load(f'{self.config["name"]}/model.pt', map_location=torch.device(self.config['device']))
         )
+        self.model.eval()  # dropout off at inference
 
     def __call__(self, features: torch.tensor, network=None):
         """
@@ -152,6 +153,8 @@ def get_np_parameterization(features, config, up_training, down_training):
     down_model = Net(features.shape[1], config['device'], config['network'])
     up_model.load_state_dict(torch.load(up_training, map_location=torch.device(config['device'])))
     down_model.load_state_dict(torch.load(down_training, map_location=torch.device(config['device'])))
+    up_model.eval()
+    down_model.eval()
     with torch.no_grad():
         up_out = up_model(features)
         down_out = down_model(features)
