@@ -1,5 +1,5 @@
 from topsbi.model.net import Net
-from topsbi.tools.data import get_lower_tri
+from topsbi.tools.data import get_lower_tri, load_zero_terms, zero_term_mask
 
 import torch, tqdm, yaml
 import numpy as np
@@ -65,20 +65,19 @@ class full_likelihood:
             sm_network = likelihood(self.config['sm'], len(self.config['features']))
             self.wcs = sm_network.config['wcs']
             sm_ratio = sm_network(features)
-        else:
-            sm_ratio = 1
+
+        zero_terms = load_zero_terms(sm_network.config)
+        same = lambda terms: {tuple(sorted(p)) for p in terms} == {tuple(sorted(p)) for p in zero_terms}
         for i, network_yaml in tqdm.tqdm(enumerate(self.config["networks"]), total=len(self.config['networks'])):
             network = likelihood(network_yaml, len(self.config["features"]))
+            if network.config['wcs'] != self.wcs or not same(load_zero_terms(network.config)):
+                raise ValueError(f'{network_yaml} uses different wcs or zero_terms than the SM network')
             self.trainingMatrix += [get_lower_tri(network.config['c1'])]
-            if network.config['c1'] == network.config['c0']:
-                self.ratios += [torch.ones(features.shape[0])]
-            else:
-                temp_ratio = network(features)
-                self.ratios += [torch.divide(temp_ratio, sm_ratio)]
+            self.ratios += [network(features)]
         self.trainingMatrix += [get_lower_tri([1] + [0] * len(self.wcs))]
-        self.ratios += [torch.ones(self.ratios[0].shape)]
+        self.ratios += [sm_ratio]
         self.trainingMatrix = torch.vstack(self.trainingMatrix)
-        self.zerosMask = ~(self.trainingMatrix == 0).all(dim=0)
+        self.zerosMask = ~(self.trainingMatrix == 0).all(dim=0) & zero_term_mask(self.wcs, zero_terms)
         self.trainingMatrix = self.trainingMatrix[:, self.zerosMask]
         self.ratios = torch.vstack(self.ratios)
         self.infFilter = ~torch.isinf(self.ratios).any(0)
