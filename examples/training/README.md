@@ -17,7 +17,7 @@
     1. `weights_only` (recommended): train with the stitched event weights `w^s(c) = L_y * coefs @ T(c)`, which keep the per-sample cross-section normalization, so the samples are mixed by cross section times luminosity
     1. `stitched`: weights `coefs @ T(c)` normalized by their mean, without luminosity
 - `name`: directory for output of training
-- `network`: optional argument used for variable network architecture
+- `network`: optional list of layers, each `{type: Linear, out: int, activation: LeakyReLU | Sigmoid | None}` with optional `in` (checked against the previous layer's `out`) and `dropout`; `None` gives a linear output. Without it, the network is 128 x 128 x 1 with LeakyReLU and a Sigmoid output
 - `patience`: early stopping, number of epochs without improvement of the test loss before training stops (default 10)
 - `scheduler`: learning-rate scheduler, `plateau` (default), `cosine` or `none`
     - `factor`: `plateau` only, multiplicative learning-rate decay (default 0.5)
