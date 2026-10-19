@@ -1,12 +1,16 @@
 from matplotlib.axes import Axes
 from matplotlib.animation import FuncAnimation, PillowWriter
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Patch, Rectangle
+from matplotlib.transforms import ScaledTranslation, blended_transform_factory
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from topsbi.tools.metrics import netEval, group_closure
 
 import numpy as np
 import matplotlib.pyplot as plt
 import mplhep as mh
 
-import os, torch, yaml, hist
+import logging, os, re, torch, yaml, hist
 
 
 def animate_plots(plots, outname, fps=5):
@@ -149,7 +153,7 @@ def kinematic_histogram(
     rErr[sparce] = np.nan
 
     centers = (bins[:-1] + bins[1:]) / 2
-    ax[1].errorbar(centers, ratio, xerr=widths / 2, yerr=rErr, fmt='.k')
+    ax[1].errorbar(centers, ratio, xerr=widths / 2, yerr=rErr, fmt='none', color='k')
     ax[1].hlines(1, bins[0], bins[-1], color='k', linestyle='dashed', alpha=0.5)
     if scale_ratio and (~sparce).any():
         bin_mask = ~sparce
@@ -414,7 +418,6 @@ def networkPlots(
     fig, ax = plt.subplots()
     lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20, threshold=0.0, include_stdv=True)
     ax.legend()
-    ax.set_xscale('log')
     fig.savefig(f'{label}/std_diff_incl.png', bbox_inches='tight')
     plt.clf()
     plt.close()
@@ -429,7 +432,6 @@ def networkPlots(
     fig, ax = plt.subplots()
     lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20, threshold=0.0)
     ax.legend()
-    ax.set_xscale('log')
     fig.savefig(f'{label}/mean_diff_incl.png', bbox_inches='tight')
     plt.clf()
     plt.close()
@@ -494,7 +496,7 @@ def networkPlots(
         rotation=90,
         fontsize=14,
     )
-    ax.set_xlabel(r'Groups quantile binned in increasing $\hat{r}$')
+    ax.set_xlabel(r'Groups quantile binned in $\hat{r}(x;\theta_1)$')
     ax.set_ylabel(
         r'$\left[\sum w(\theta_0)\,\hat{r}(x;\theta_1) - \sum w(\theta_0) \,r(x,z;\theta_1)\right]\,/\,\sigma$'
     )
@@ -893,27 +895,18 @@ def lr_calibration_difference(
 
     mean_stdv_formatting = {
         'align': 'edge',
-        'facecolor': "#E6EEE6",
+        'facecolor': "#D5E3D5",
         'linewidth': 0,
         'label': r'$\sigma_{ r  -\hat{r}}$',
+        'alpha': 0.6,
     }
+
+    ax.hist(qbins[:-1], weights=differ, bins=qbins, histtype='step', color='k', label=r'$r - \hat{r}$')
 
     if include_stdv:
         ax.bar(qbins[:-1], stdv_width, bottom=stdv_down, width=(qbins[1:] - qbins[:-1]), **mean_stdv_formatting)
     ax.plot([qbins[0], qbins[-1]], [0, 0], color='grey', linestyle=':', label='_nolegend_')
     ax.bar(qbins[:-1], err_width, bottom=err_down, width=(qbins[1:] - qbins[:-1]), **mean_error_formatting)
-
-    ax.bar(
-        qbins[:-1],
-        differ,
-        width=(qbins[1:] - qbins[:-1]),
-        label=r'$r - \hat{r}$',
-        facecolor='none',
-        edgecolor='k',
-        align='edge',
-    )
-
-    # ax.hist(meanlrhat, weights=differ, bins=qbins, histtype='step', color='k', label=r'$r - \hat{r}$')
 
     pulls = np.abs(differ) / mean_err
     pulls = pulls[np.isfinite(pulls)]
@@ -926,7 +919,7 @@ def lr_calibration_difference(
     # binomial scatter of the fraction of bins inside each interval
     ci_diff_err = [np.sqrt(e * (1 - e) / n).item() for e in expected]
 
-    # mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
+    mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
     ax.set_xlabel(r'$\left\langle\hat{r}\,(x;\theta_1,\theta_0)\right\rangle$')
     ax.set_ylabel(
         r'$\left\langle{r}\,(x,z;\theta_1,\theta_0)\right\rangle - \left\langle\hat{{r}}\,(x;\theta_1,\theta_0)\right\rangle$'
@@ -936,3 +929,819 @@ def lr_calibration_difference(
     ax.set_xlim([qbins[0], qbins[-1]])
 
     return pull, pull_err, ci_diff, ci_diff_err
+
+
+# reference categorical palette (fixed order), slot 1 for the ensemble, the rest for outlier seeds
+ENSEMBLE_COLOR = '#2a78d6'
+MEDIAN_COLOR = '#184f95'  # darker step of the same blue ramp, for the median over seeds
+SEARCH_COLOR = '#008300'  # palette green, for what the point search proposes
+OUTLIER_COLORS = ['#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
+
+
+def plot_residuals(residuals, outname, bins=200, outlier_factor=3.0):
+    '''
+    Distribution of the per-event least-squares residuals ||Theta gamma_hat - r_hat||^2 across seeds: the median
+    histogram over seeds, the band between the smallest and largest count per bin, and, as separate lines, seeds whose
+    median residual differs from the typical seed's by more than outlier_factor.
+
+    Args:
+        residuals: {seed: [N_s] residuals}, None for a seed whose fit returned none (rank-deficient Theta)
+        outname: file to save the plot to; a log-count version is saved as <outname>_log next to it
+        bins: bin edges of the residuals, or a number of log-spaced bins spanning the residuals of all seeds
+        outlier_factor: ratio of a seed's median residual to the median over seeds beyond which it is drawn alone
+    Returns:
+        seeds drawn as outliers
+    '''
+    available = {seed: np.asarray(r) for seed, r in residuals.items() if r is not None}
+    missing = [seed for seed in residuals if seed not in available]
+    if missing:
+        print(f'[info]: no fit residuals for seeds {missing}')
+    if not available:
+        print(f'[info]: no fit residuals stored, {outname} not made')
+        return []
+
+    # x range and default bins from the residuals of all seeds; the smallest positive value, since the axis is log
+    values = np.concatenate(list(available.values()))
+    lo, hi = values[values > 0].min(), values.max()
+    if np.isscalar(bins):
+        bins = np.logspace(np.log10(lo), np.log10(hi), int(bins) + 1)
+
+    seeds = list(available)
+    counts = np.array([np.histogram(available[seed], bins=bins)[0] for seed in seeds])
+    medians = np.array([np.median(available[seed]) for seed in seeds])
+    typical = np.median(medians)
+    outliers = [seed for seed, m in zip(seeds, medians) if abs(np.log(m / typical)) > np.log(outlier_factor)]
+    if len(outliers) > len(OUTLIER_COLORS):
+        print(f'[info]: {len(outliers)} outlier seeds, only the first {len(OUTLIER_COLORS)} are drawn')
+
+    fig, ax = plt.subplots()
+    ax.stairs(
+        counts.max(0),
+        bins,
+        baseline=counts.min(0),
+        fill=True,
+        color=ENSEMBLE_COLOR,
+        alpha=0.3,
+        label=f'min-max over {len(seeds)} seeds',
+    )
+    ax.stairs(np.median(counts, axis=0), bins, color=MEDIAN_COLOR, linewidth=2, label='median over seeds')
+    for seed, color in zip(outliers, OUTLIER_COLORS):
+        ax.stairs(counts[seeds.index(seed)], bins, color=color, linewidth=2, label=f'seed {seed}')
+    ax.legend()
+    ax.set_xscale('log')
+    ax.set_xlim(lo, hi)
+    ax.set_ylabel('Number of Events')
+    ax.set_xlabel('Fit Residuals')
+    mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
+    fig.savefig(outname, bbox_inches='tight')
+    # the same plot with a logarithmic count axis, saved next to it as <outname>_log
+    root, ext = os.path.splitext(outname)
+    ax.set_yscale('log')
+    fig.savefig(f'{root}_log{ext}', bbox_inches='tight')
+    plt.close(fig)
+    return outliers
+
+
+# sequential ramp of the reference palette (blue, light to dark)
+SEQUENTIAL = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b']
+KIND_ORDER = ['sm', 'linear', 'quadratic', 'cross']
+# label colours for networks the suspects step dropped (dark red) or wants retrained (orange)
+NOTE_COLORS = {'dropped': '#a51d1d', 'retrain': '#d95926'}
+
+
+def wc_tex(wc):
+    '''TeX of a WC name, the convention of likelihood_scan_dev.ipynb: cQj31 -> c_{Qj}^{31}, ctGRe -> \Re[c_{tG}].'''
+    m = re.fullmatch(r'c([A-Za-z]+?)(Re|Im)', wc)
+    if m:
+        return rf'\{m.group(2)}\left[c_{{{m.group(1)}}}\right]'
+    sub, sup = re.fullmatch(r'c([A-Za-z]+)(\d*)', wc).groups()
+    return f'c_{{{sub}}}' + ('' if not sup else f'^{sup}' if len(sup) == 1 else f'^{{{sup}}}')
+
+
+def component_tex(label):
+    '''TeX label of a gamma component from component_labels: sm, c, |c|^2 or c_a . c_b.'''
+    if label == 'sm':
+        return 'sm'
+    if label.endswith('^2'):
+        return rf'$\left|{wc_tex(label[:-2])}\right|^2$'
+    # the space only ends the command name (\cdotc would be read otherwise); TeX does not print it
+    return '$' + r'\cdot '.join(wc_tex(wc) for wc in label.split('*')) + '$'
+
+
+def _no_tex_mapping(record):
+    '''Logging filter for mathtext's harmless notice that sized delimiters (\\left| ... \\right|) have no Unicode glyph.'''
+    return not record.getMessage().startswith('No TeX to Unicode mapping')
+
+
+def plot_z_heatmap(
+    Z, labels, kinds, features, outname, z_threshold=5.0, z_max=15.0, components=None, feature_config=None, Z_gauss=None
+):
+    '''
+    Significance of the bias of gamma components in every network input. Columns are components, grouped by kind and
+    sorted by their largest Z within each group; rows are features, sorted by how many components exceed z_threshold
+    in them (counted over all components, so every version of the plot shares the row order); cells above z_threshold
+    are outlined.
+
+    Args:
+        Z: [K, F] output of component_bias
+        labels, kinds: [K] component names and kinds (component_labels)
+        features: [F] feature names (binning['names'])
+        outname: file to save the plot to
+        z_threshold: flagging threshold
+        z_max: Z at the top of the colour scale (larger values share the darkest colour)
+        components: indices of the components to show, default all
+        feature_config: contents of the features yml; if given, features are labelled with their TeX label (as on
+            the x axis of the training's kinematic plots, without the unit) instead of by name
+        Z_gauss: [K, F] Gaussian-equivalent significance; cells with Z_gauss > z_threshold (a genuine 5 sigma) get a
+            second, inner outline
+    '''
+    kinds = np.array(kinds)
+    components = np.arange(len(labels)) if components is None else np.asarray(components)
+    max_z = np.nanmax(Z, axis=1)
+    columns = [k for kind in KIND_ORDER for k in sorted(components[kinds[components] == kind], key=lambda k: -max_z[k])]
+    rows = np.argsort(-(Z > z_threshold).sum(0), kind='stable')
+    shown = Z[np.ix_(columns, rows)].T
+
+    cmap = LinearSegmentedColormap.from_list('sequential', SEQUENTIAL)
+    cmap.set_bad('#d9d9d9')  # no events of the component in that feature
+    # square cells, 0.55 inch on a side, with room for the labels, the colour bar and the header
+    fig, ax = plt.subplots(figsize=(0.55 * len(columns) + 4, 0.55 * len(rows) + 3))
+    image = ax.imshow(np.clip(shown, 0, z_max), cmap=cmap, vmin=0, vmax=z_max, aspect='equal', interpolation='none')
+    for row, col in zip(*np.nonzero(shown > z_threshold)):
+        ax.add_patch(Rectangle((col - 0.5, row - 0.5), 1, 1, fill=False, edgecolor='#e34948', linewidth=1.5))
+    if Z_gauss is not None:
+        # a second outline inside the first where the flag is also a genuine 5 sigma
+        strong = Z_gauss[np.ix_(columns, rows)].T > z_threshold
+        for row, col in zip(*np.nonzero(strong)):
+            ax.add_patch(Rectangle((col - 0.3, row - 0.3), 0.6, 0.6, fill=False, edgecolor='#e34948', linewidth=1.5))
+    # separators between the kinds
+    present = [kind for kind in KIND_ORDER if (kinds[columns] == kind).any()]
+    edges = np.cumsum([(kinds[columns] == kind).sum() for kind in present])
+    for e in edges[:-1]:
+        ax.axvline(e - 0.5, color='k', linewidth=1)
+    ax.set_xticks(range(len(columns)), [component_tex(labels[k]) for k in columns], rotation=90, fontsize=16)
+    if feature_config is None:
+        names = [features[f] for f in rows]
+    else:
+        names = [feature_config[features[f]]['label'] for f in rows]
+    ax.set_yticks(range(len(rows)), names, fontsize=16)
+    # colour bar 0.6 inch wide, attached to the grid so it always has the grid's height
+    bar = fig.colorbar(image, cax=make_axes_locatable(ax).append_axes('right', size=0.6, pad=0.15))
+    # Z upright above the bar, level with the kind names over the grid
+    bar.ax.set_title('Z', fontsize=16, pad=4)
+    # values above z_max share the top colour, which the last tick says
+    ticks = list(range(0, int(z_max), 2)) + [z_max]
+    bar.set_ticks(ticks, labels=[f'{t:g}' for t in ticks[:-1]] + [rf'$\geq${z_max:g}'])
+    bar.ax.axhline(z_threshold, color='#e34948', linewidth=2)
+    cms = mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
+    # kind names just above the grid, centred on their group of columns
+    gap = ScaledTranslation(0, 4 / 72, fig.dpi_scale_trans)
+    where = blended_transform_factory(ax.transData, ax.transAxes) + gap
+    names = [
+        ax.text((first + stop - 1) / 2, 1, kind, transform=where, ha='center', va='bottom', fontsize=16)
+        for kind, first, stop in zip(present, np.r_[0, edges[:-1]], edges)
+    ]
+
+    # the TeX labels are drawn when the figure is; silence only mathtext's notice about the sized delimiters
+    mathtext_log = logging.getLogger('matplotlib.mathtext')
+    mathtext_log.addFilter(_no_tex_mapping)
+    try:
+        # the CMS header moves up above the kind names, whose height is known only once they are drawn
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        height = max(t.get_window_extent(renderer).height for t in names) / fig.dpi
+        lift = ScaledTranslation(0, height + 8 / 72, fig.dpi_scale_trans)
+        for text in cms:
+            if text is not None:
+                text.set_transform(text.get_transform() + lift)
+        fig.savefig(outname, bbox_inches='tight')
+    finally:
+        mathtext_log.removeFilter(_no_tex_mapping)
+    plt.close(fig)
+
+
+def _place_legend(ax, samples, note, fontsize=20):
+    '''
+    Put the legend, with a note line under it, where the two cover the fewest data samples. The corners and the top and
+    bottom centres of the axes are tried in turn; the axis ranges are not changed. For a bottom placement the legend is
+    lifted by the height of the note, so the note still sits under it.
+
+    Args:
+        ax: axes holding the labelled artists
+        samples: [N, 2] points in data coordinates that the legend should avoid (lines and error bars, densely sampled)
+        note: text of the line under the legend
+        fontsize: font size of the legend entries and the note
+    Returns:
+        the legend and the note text
+    '''
+    fig = ax.figure
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    points = ax.transData.transform(samples)
+    to_axes = ax.transAxes.inverted()
+    probe = ax.text(0, 0, note, transform=ax.transAxes, fontsize=fontsize)
+    lift = (probe.get_window_extent(renderer).height + 4) / ax.get_window_extent(renderer).height
+    probe.remove()
+
+    def place(loc):
+        anchor = (0, lift, 1, 1 - lift) if loc.startswith('lower') else (0, 0, 1, 1)
+        legend = ax.legend(fontsize=fontsize, loc=loc, bbox_to_anchor=anchor, bbox_transform=ax.transAxes)
+        box = legend.get_window_extent(renderer)
+        (x0, y0), (x1, _) = to_axes.transform([(box.x0, box.y0), (box.x1, box.y1)])
+        side = 'right' if 'right' in loc else 'left' if 'left' in loc else 'center'
+        x = {'right': x1, 'left': x0, 'center': (x0 + x1) / 2}[side]
+        text = ax.text(x, y0, note, transform=ax.transAxes, ha=side, va='top', fontsize=fontsize)
+        return legend, text
+
+    scores = {}
+    for loc in ['upper right', 'upper left', 'upper center', 'lower right', 'lower left', 'lower center']:
+        legend, text = place(loc)
+        boxes = [legend.get_window_extent(renderer), text.get_window_extent(renderer)]
+        scores[loc] = sum(
+            int(
+                (
+                    (points[:, 0] >= b.x0) & (points[:, 0] <= b.x1) & (points[:, 1] >= b.y0) & (points[:, 1] <= b.y1)
+                ).sum()
+            )
+            for b in boxes
+        )
+        legend.remove()
+        text.remove()
+    return place(min(scores, key=scores.get))
+
+
+def plot_closure(k, f, sums, bias, binning, labels, outname, feature_config=None):
+    '''
+    Closure of one gamma component in one feature: the learned sum w0 * gamma_k against its truth per bin (top), and
+    their difference relative to the SM yield with the noise band sqrt(E^2 + s^2) of the bias test (bottom). Error bars
+    show the MC statistics of each sum (and the seed spread for the learned one), both at the bin centre. Bins are
+    drawn with equal widths and labelled by their edges; bins without events of the component are hatched.
+
+    Args:
+        k: component index
+        f: feature index into binning['names']
+        sums: output of component_sums
+        bias: output of component_bias
+        binning: the binning of sums
+        labels: [K] component names (component_labels)
+        outname: file to save the plot to
+        feature_config: contents of the features yml, for the feature's TeX label
+    '''
+    b = binning['feature'] == f
+    truth, D = sums['truth'][k, b], bias['D'][k, b]
+    noise = np.sqrt(sums['mc_var'][k, b] + bias['s2'][k, b])
+    sm = sums['sm_yield'][b]
+    empty = sums['mc_var'][k, b] <= 0
+    edges = binning['edges'][f]
+    x = np.arange(len(edges))
+    centers = x[:-1] + 0.5
+
+    fig, (top, bottom) = plt.subplots(
+        2, 1, sharex=True, figsize=(10, 9), gridspec_kw={'height_ratios': [2, 1], 'hspace': 0}
+    )
+    top.stairs(truth, x, color='k', linewidth=2, label='truth')
+    top.stairs(truth + D, x, color=ENSEMBLE_COLOR, linewidth=2, label=r'$\sum w_0\,\hat{\gamma}$')
+    # MC statistics of each sum; the learned one also carries the seed spread of the ensemble mean
+    truth_err = np.sqrt(sums['truth_var'][k, b])
+    learned_err = np.sqrt(sums['learned_var'][k, b] + bias['s2'][k, b])
+    top.errorbar(centers, truth, yerr=truth_err, fmt='none', color='k', linewidth=2)
+    top.errorbar(
+        centers,
+        truth + D,
+        yerr=learned_err,
+        fmt='none',
+        color=ENSEMBLE_COLOR,
+        linewidth=2,
+    )
+    # the component's coefficient in the yield: events it adds per bin when its WC product equals 1
+    if labels[k] == 'sm':
+        top.set_ylabel('Events (SM)')
+    else:
+        top.set_ylabel(f'Events per unit {component_tex(labels[k])}')
+    band = np.where(empty, np.nan, noise / sm)
+    bottom.stairs(
+        band, x, baseline=-band, fill=True, color='#d9d9d9', label=r'$\pm\sqrt{E^2 + s^2} / \lambda(\mathrm{sm})$'
+    )
+    bottom.plot(centers[~empty], (D / sm)[~empty], 'o', color='k', label=r'$\Delta / \lambda(\mathrm{sm})$')
+    bottom.axhline(0, color='k', linestyle='--', linewidth=1)
+    # bins without events of the component: hatched in both panels
+    for i in np.flatnonzero(empty):
+        for ax in (top, bottom):
+            ax.axvspan(x[i], x[i + 1], facecolor='none', edgecolor='#9a9a9a', hatch='//', linewidth=0)
+    bottom.set_ylabel(r'$\Delta / \lambda(\mathrm{sm})$')
+    name = binning['names'][f]
+    # as on the x axis of the training's kinematic plots: label [unit]
+    if feature_config:
+        unit = feature_config[name].get('unit')
+        bottom.set_xlabel(feature_config[name]['label'] + (f' [{unit}]' if unit else ''))
+    else:
+        bottom.set_xlabel(name)
+    # equal-width bins labelled with the feature values at 6 evenly spaced edges, the first and last included
+    # (fewer if the feature has fewer edges); 3 significant digits, no exponent
+    tick = [np.format_float_positional(e, precision=3, unique=False, fractional=False, trim='-') for e in edges]
+    # a feature symmetric about 0 (e.g. an eta) gets 7 labels instead, the middle one at the point where it is 0
+    symmetric = edges[0] < 0 < edges[-1] and abs(edges[0] + edges[-1]) <= 0.05 * (edges[-1] - edges[0])
+    shown = np.unique(np.round(np.linspace(0, len(edges) - 1, min(7 if symmetric else 6, len(edges)))).astype(int))
+    positions, names = list(x[shown].astype(float)), [tick[i] for i in shown]
+    if symmetric and len(shown) == 7:
+        positions[3], names[3] = float(np.interp(0, edges, x)), '0'
+    bottom.set_xticks(positions, names)
+    # minor ticks on every bin edge, so major and minor ticks both sit on edges (shared by the top panel)
+    bottom.set_xticks(x, minor=True)
+    bottom.set_xlim(x[0], x[-1])
+    # the CMS label measures the text already on the figure, so the filter must be on before it is added
+    mathtext_log = logging.getLogger('matplotlib.mathtext')
+    mathtext_log.addFilter(_no_tex_mapping)
+    try:
+        mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=top)
+        # legend and Z_max where they cover the least of the lines and error bars (the ranges stay as they are)
+        sampled = [
+            np.c_[np.linspace(x[i], x[i + 1], 20), np.full(20, v[i])] for v in (truth, truth + D) for i in range(len(v))
+        ]
+        sampled += [
+            np.c_[np.full(20, x[i + 1]), np.linspace(v[i], v[i + 1], 20)]
+            for v in (truth, truth + D)
+            for i in range(len(v) - 1)
+        ]
+        sampled += [
+            np.c_[np.full(20, c), np.linspace(v - e, v + e, 20)]
+            for vals, errs in ((truth, truth_err), (truth + D, learned_err))
+            for c, v, e in zip(centers, vals, errs)
+        ]
+        samples = np.concatenate(sampled)
+        _place_legend(top, samples[np.isfinite(samples).all(1)], rf'$Z_{{max}}$ = {np.nanmax(bias["Z"][k]):.1f}')
+        fig.savefig(outname, bbox_inches='tight')
+    finally:
+        mathtext_log.removeFilter(_no_tex_mapping)
+    plt.close(fig)
+
+
+def network_tex(Theta, names, wcs, mask):
+    '''
+    TeX label of the training point of every network: its nonzero WC values, read from the linear columns of Theta,
+    e.g. "c_Qj^31 = 1.70" or "c_Qj^31, Re[c_tG] = -1.28, 4.27"; the SM anchor is "sm".
+
+    Args:
+        Theta: [n_networks, K] expanded training points
+        names: network names, rows of Theta
+        wcs: WC names in get_lower_tri order
+        mask: kept get_lower_tri columns
+    Returns:
+        {network name: label}
+    '''
+    rows, cols = np.tril_indices(len(wcs) + 1)
+    kept = [(int(i), int(j)) for i, j, keep in zip(rows, cols, mask) if keep]
+    linear = {i: kept.index((i, 0)) for i in range(1, len(wcs) + 1) if (i, 0) in kept}
+    out = {}
+    for name, row in zip(names, Theta):
+        point = [(wc_tex(wcs[i - 1]), row[c]) for i, c in linear.items() if row[c] != 0]
+        if not point:
+            out[name] = 'sm'
+        elif len(point) == 1:
+            out[name] = rf'${point[0][0]} = {point[0][1]:.2f}$'
+        else:
+            # interference point: c_a, c_b = x, y
+            wc_part = ', '.join(t for t, _ in point)
+            value_part = ', '.join(f'{v:.2f}' for _, v in point)
+            out[name] = rf'${wc_part} = {value_part}$'
+    return out
+
+
+def plot_attribution(k, shares, flagged, labels, bias, network_tex, outname, n_top=10, notes=None):
+    '''
+    Signed shares of the training networks in the bias of one gamma component (shares sum to 1): the n_top networks
+    with the largest |share| and the sum of the others, as horizontal bars.
+
+    Args:
+        k: component index
+        shares: first output of attribute, {network name: [len(flagged)]}
+        flagged: component indices attribute was run for (gives the column of k)
+        labels: [K] component names (component_labels)
+        bias: output of component_bias (for Z_max and rms bias above the plot)
+        network_tex: {network name: TeX label of its training point}
+        outname: file to save the plot to
+        n_top: networks shown individually
+        notes: {network name: 'dropped' or 'retrain'}; their labels are coloured and a legend names the colours
+    '''
+    column = flagged.index(k)
+    ranked = sorted(shares, key=lambda n: -abs(shares[n][column]))
+    top, rest = ranked[:n_top], ranked[n_top:]
+    values = [shares[n][column] for n in top] + [sum(shares[n][column] for n in rest)]
+    notes = notes or {}
+    names = [network_tex[n] for n in top]
+    names.append(f'other ({len(rest)} networks)')
+    y = np.arange(len(values))[::-1]  # largest at the top
+
+    fig, ax = plt.subplots(figsize=(12, 0.6 * len(values) + 2))
+    ax.barh(y, values, height=0.8, color=ENSEMBLE_COLOR)
+    ax.axvline(0, color='k', linewidth=1)
+    ax.axvline(1, color='k', linewidth=1, linestyle=':')
+    ax.set_yticks(y, names, fontsize=16)
+    # networks the suspects step dropped or wants retrained: coloured labels, named in a legend
+    for tick, n in zip(ax.get_yticklabels(), top):
+        if n in notes:
+            tick.set_color(NOTE_COLORS[notes[n]])
+    present = [kind for kind in NOTE_COLORS if kind in {notes[n] for n in top if n in notes}]
+    ax.set_ylim(-0.5, len(values) - 0.5)
+    ax.set_xlabel(r'share of $\Delta$')
+    max_z = np.nanmax(bias['Z'][k])
+    size = np.nanmax(bias['rms_bias'][k])
+    # component and its bias centred just above the plot; the CMS header is lifted above it below
+    gap = ScaledTranslation(0, 4 / 72, fig.dpi_scale_trans)
+    note = ax.text(
+        0.5,
+        1,
+        f'{component_tex(labels[k])}: $Z_{{max}}$ = {max_z:.1f}, $\\Delta_{{rms}}$ = {size:.1e}',
+        transform=ax.transAxes + gap,
+        ha='center',
+        va='bottom',
+        fontsize=18,
+    )
+    mathtext_log = logging.getLogger('matplotlib.mathtext')
+    mathtext_log.addFilter(_no_tex_mapping)
+    try:
+        cms = mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
+        # the header's lift is the label's height, known only once drawn
+        fig.canvas.draw()
+        lift = ScaledTranslation(
+            0, note.get_window_extent(fig.canvas.get_renderer()).height / fig.dpi + 8 / 72, fig.dpi_scale_trans
+        )
+        for text in cms:
+            if text is not None:
+                text.set_transform(text.get_transform() + lift)
+        if present:
+            # legend on the line of the Z_max label, centred over the column of network labels
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            boxes = [t.get_window_extent(renderer) for t in ax.get_yticklabels()]
+            center_x = (min(b.x0 for b in boxes) + max(b.x1 for b in boxes)) / 2
+            line = note.get_window_extent(renderer)
+            fig.legend(
+                handles=[Patch(color=NOTE_COLORS[kind], label=kind) for kind in present],
+                fontsize=16,
+                loc='center',
+                bbox_to_anchor=fig.transFigure.inverted().transform((center_x, (line.y0 + line.y1) / 2)),
+                borderaxespad=0,
+                borderpad=0,
+                ncols=len(present),
+            )
+        fig.savefig(outname, bbox_inches='tight')
+    finally:
+        mathtext_log.removeFilter(_no_tex_mapping)
+    plt.close(fig)
+
+
+# diverging pair of the reference palette: blue (Z_max down) - neutral grey - red (Z_max up)
+DIVERGING = ['#184f95', '#2a78d6', '#f0efec', '#e34948', '#a51d1d']
+
+
+def plot_drop_tests(
+    baseline, after, combined, groups, blamed, tests, labels, network_tex, outname, min_change=1.0, show_all=False
+):
+    '''
+    Change of Z_max (without the group - full ensemble) of every component a suspect group affects, for every group the
+    drop test tried and for the combined refit without all accepted groups. Cells a group was blamed for are outlined;
+    row labels are dark red for accepted groups, black for rejected ones and grey for groups whose removal would leave
+    Theta rank-deficient (hatched, no refit).
+
+    Args:
+        baseline: component_bias of the full ensemble
+        after: {group: component_bias without the group, or None if Theta would lose rank}
+        combined: component_bias without all accepted groups (None if nothing was accepted)
+        groups: {group: [network names]}
+        blamed: {group: [component indices it was blamed for]}
+        tests: output of test_drops (accepted, gain, harmed per group)
+        labels: [K] component names
+        network_tex: {network name: TeX label of its training point}
+        outname: file to save the plot to
+        min_change: a component is shown if some group changes its Z_max by more than this
+        show_all: show every component instead
+    '''
+    before = np.nanmax(baseline['Z'], axis=1)
+    names = list(groups)
+    rows = [None if after[g] is None else np.nanmax(after[g]['Z'], axis=1) - before for g in names]
+    accepted = [g for g in names if tests[g]['accepted']]
+    if combined is not None:
+        rows.append(np.nanmax(combined['Z'], axis=1) - before)
+    shown = {k for r in rows if r is not None for k in np.flatnonzero(np.abs(r) > min_change)}
+    shown |= {k for g in names for k in blamed[g]}
+    if show_all:
+        shown = set(range(len(labels)))
+    kinds = np.array(component_kinds(labels))
+    columns = [k for kind in KIND_ORDER for k in sorted(shown, key=lambda k: -before[k]) if kinds[k] == kind]
+    delta = np.array([np.full(len(columns), np.nan) if r is None else r[columns] for r in rows])
+
+    def row_label(g):
+        members = groups[g]
+        if len(members) == 1:
+            return network_tex[members[0]]
+        return network_tex[members[0]].split(' = ')[0] + f'$ ({len(members)} points)'
+
+    row_names = [row_label(g) for g in names] + (['all accepted (combined)'] if combined is not None else [])
+    row_colors = [NOTE_COLORS['dropped'] if g in accepted else '#9a9a9a' if after[g] is None else 'k' for g in names]
+    row_colors += ['k'] if combined is not None else []
+    outlined = [blamed[g] for g in names] + (
+        [sorted({k for g in accepted for k in blamed[g]})] if combined is not None else []
+    )
+
+    # matplotlib's RdBu, reversed so that a drop in Z_max is blue and a rise is red
+    cmap = plt.cm.RdBu_r.copy()
+    cmap.set_bad('white')
+    fig, ax = plt.subplots(figsize=(0.55 * len(columns) + 6, 0.55 * len(row_names) + 4))
+    image = ax.imshow(np.clip(delta, -10, 10), cmap=cmap, vmin=-10, vmax=10, aspect='equal', interpolation='none')
+    for r, c in zip(*np.nonzero(np.isfinite(delta))):
+        v = delta[r, c]
+        # + 0.0 turns a value that rounds to -0.0 into 0.0
+        text = f'{np.round(v, 1) + 0.0:.1f}'
+        ax.text(c, r, text, ha='center', va='center', fontsize=11, color='white' if abs(v) > 6 else 'k')
+    for r, ks in enumerate(outlined):
+        for k in ks:
+            if k in columns:
+                c = columns.index(k)
+                ax.add_patch(Rectangle((c - 0.5, r - 0.5), 1, 1, fill=False, edgecolor='k', linewidth=2))
+    for r in np.flatnonzero(~np.isfinite(delta).any(1)):
+        ax.add_patch(
+            Rectangle((-0.5, r - 0.5), len(columns), 1, facecolor='none', edgecolor='#9a9a9a', hatch='//', linewidth=0)
+        )
+    if combined is not None:
+        ax.axhline(len(names) - 0.5, color='k', linewidth=2)
+    # separators between the kinds of components
+    present = [kind for kind in KIND_ORDER if (kinds[columns] == kind).any()]
+    for e in np.cumsum([(kinds[columns] == kind).sum() for kind in present])[:-1]:
+        ax.axvline(e - 0.5, color='k', linewidth=1)
+    ax.set_xticks(range(len(columns)), [component_tex(labels[k]) for k in columns], rotation=90, fontsize=16)
+    ax.set_yticks(range(len(row_names)), row_names, fontsize=16)
+    for tick, color in zip(ax.get_yticklabels(), row_colors):
+        tick.set_color(color)
+    # rows and columns are labelled, so no tick marks reaching into the cells
+    ax.tick_params(which='both', length=0)
+    bar = fig.colorbar(image, cax=make_axes_locatable(ax).append_axes('right', size=0.6, pad=0.15))
+    bar.set_label(r'$\Delta Z_{max}$ (without - with)')
+    bar.set_ticks([-10, -5, 0, 5, 10], labels=[r'$\leq$-10', '-5', '0', '5', r'$\geq$10'])
+    mathtext_log = logging.getLogger('matplotlib.mathtext')
+    mathtext_log.addFilter(_no_tex_mapping)
+    try:
+        mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
+        fig.savefig(outname, bbox_inches='tight')
+    finally:
+        mathtext_log.removeFilter(_no_tex_mapping)
+    plt.close(fig)
+
+
+def component_kinds(labels):
+    '''Kind of every component label from component_labels: sm, linear, quadratic or cross.'''
+    return [
+        'sm' if name == 'sm' else 'quadratic' if name.endswith('^2') else 'cross' if '*' in name else 'linear'
+        for name in labels
+    ]
+
+
+def unit_tex(unit, wcs):
+    '''
+    TeX label of a point-search unit: the WCs it varies with their magnitudes; a cross-term unit (the 4 sign
+    combinations) reads "c_a, c_b = +-x, +-y", a single point "c_a, c_b = x, y".
+    '''
+    theta = np.asarray(unit['points'][0]['theta'])
+    nonzero = np.flatnonzero(theta[1:]) + 1
+    names = ', '.join(wc_tex(wcs[i - 1]) for i in nonzero)
+    if len(unit['points']) > 1:
+        values = ', '.join(rf'\pm{abs(theta[i]):.2f}' for i in nonzero)
+    else:
+        values = ', '.join(f'{theta[i]:.2f}' for i in nonzero)
+    return rf'${names} = {values}$'
+
+
+def plot_point_search(history, chosen, wcs, outname, scan=False):
+    '''
+    Objective of the point search after each added unit, relative to the current design (1 = no units added), with
+    every step labelled by the unit it added.
+
+    Args:
+        history: objective after each step, history[0] for the current design (search_points)
+        chosen: the units added, in order (search_points)
+        wcs: WC names in get_lower_tri order
+        outname: file to save the plot to
+        scan: the search used the scan-region weights (G: scan) rather than the flagged-component weights
+    '''
+    relative = np.asarray(history) / history[0]
+    x = np.arange(len(relative))
+    fig, ax = plt.subplots(figsize=(0.8 * len(x) + 6, 8))
+    # one bin per step (the current design, then each added point), drawn as a step outline
+    ax.hist(
+        x, bins=np.arange(len(relative) + 1) - 0.5, weights=relative, histtype='step', color=SEARCH_COLOR, linewidth=2
+    )
+    # labels slanted at 45 degrees, anchored at their right end under their point
+    names = ['current design'] + [unit_tex(u, wcs) for u in chosen]
+    ax.set_xticks(x, names, rotation=45, ha='right', rotation_mode='anchor', fontsize=16)
+    ax.set_xlim(-0.5, len(x) - 0.5)
+    # y range from just below the lowest bin to just above the current design, so the steps fill the plot
+    span = relative.max() - relative.min()
+    pad = 0.1 * span if span > 0 else 0.05
+    ax.set_ylim(relative.min() - pad, relative.max() + pad)
+    ax.tick_params(axis='x', which='minor', length=0)
+    # with the flagged weights the relative objective is the weighted mean of each component's squared error
+    # relative to the current design; with the scan-region weights it is a trace over the scan region
+    if scan:
+        ax.set_ylabel('scan-region expected error, relative to the current design')
+    else:
+        ax.set_ylabel(r'$\left\langle (\sigma_k / \sigma_k^{\mathrm{current}})^2 \right\rangle_w$')
+    ax.set_xlabel('point added')
+    mathtext_log = logging.getLogger('matplotlib.mathtext')
+    mathtext_log.addFilter(_no_tex_mapping)
+    try:
+        mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
+        fig.savefig(outname, bbox_inches='tight')
+    finally:
+        mathtext_log.removeFilter(_no_tex_mapping)
+    plt.close(fig)
+
+
+def plot_search_sigma(sigma0, sigma1, rms_bias, labels, outname, components=None):
+    '''
+    Expected error of the components (independent network errors) with the current design (black) and with the points
+    the point search proposes (green), joined by a thin line, over the measured rms bias (grey bars), log scale.
+    Components the design cannot determine (NaN) are marked on the upper edge, components with rms bias 0 (noise
+    exceeds the bias) on the lower edge.
+
+    Args:
+        sigma0, sigma1: [K] propagated errors before and after the search, NaN for unconstrained components
+        rms_bias: [K, F] output of component_bias
+        labels: [K] component names (component_labels)
+        outname: file to save the plot to
+        components: indices of the components to show, default all
+    '''
+    size = np.nanmax(rms_bias, axis=1)
+    components = np.arange(len(labels)) if components is None else np.asarray(components)
+    order = sorted(components, key=lambda k: -size[k])
+    x = np.arange(len(order))
+    s0, s1, b = sigma0[order], sigma1[order], size[order]
+    shown = np.concatenate([b, s0, s1])
+    shown = shown[np.isfinite(shown) & (shown > 0)]
+    low, high = shown.min() / 2, shown.max() * 2
+
+    fig, ax = plt.subplots(figsize=(0.55 * len(order) + 4, 7))
+    ax.bar(x[b > 0], b[b > 0], width=1, fill=False, edgecolor='#9a9a9a', linewidth=2, label=r'measured $\Delta_{rms}$')
+    zero = ~(b > 0)
+    if zero.any():
+        # noise exceeds the bias: no bar, a marker on the lower edge instead
+        ax.scatter(
+            x[zero],
+            np.full(zero.sum(), low),
+            marker='^',
+            s=120,
+            color='#9a9a9a',
+            clip_on=False,
+            zorder=5,
+            label=r'$\Delta_{rms}$ = 0 (noise exceeds $\Delta$)',
+        )
+    both = np.isfinite(s0) & np.isfinite(s1)
+    ax.vlines(x[both], s1[both], s0[both], colors='k', linewidth=1, zorder=3)
+    ax.hlines(s0, x - 0.5, x + 0.5, colors='k', linewidth=2, zorder=4, label='current design')
+    # dashed, so the current-design tick shows through where the two coincide
+    ax.hlines(
+        s1,
+        x - 0.5,
+        x + 0.5,
+        colors=SEARCH_COLOR,
+        linewidth=2,
+        linestyles='--',
+        zorder=4,
+        label='with the proposed points',
+    )
+    for values, color in ((s0, 'k'), (s1, SEARCH_COLOR)):
+        free = np.isnan(values)
+        if free.any():
+            ax.scatter(x[free], np.full(free.sum(), high), marker='v', s=120, color=color, clip_on=False, zorder=5)
+    ax.set_yscale('log')
+    ax.set_ylim(low, high)
+    ax.set_ylabel(r'$\sigma_k / \lambda(\mathrm{sm})$')
+    ax.legend(fontsize=16)
+    ax.set_xticks(x, [component_tex(labels[k]) for k in order], rotation=90, fontsize=16)
+    ax.set_xlim(-0.5, len(order) - 0.5)
+    mathtext_log = logging.getLogger('matplotlib.mathtext')
+    mathtext_log.addFilter(_no_tex_mapping)
+    try:
+        mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
+        fig.savefig(outname, bbox_inches='tight')
+    finally:
+        mathtext_log.removeFilter(_no_tex_mapping)
+    plt.close(fig)
+
+
+# markers of the kinds of training point: (marker, colour, label); palette slots 1 and 3, the SM anchor in black
+POINT_KINDS = {
+    'scan': ('o', '#2a78d6', 'single-WC point'),
+    'cross': ('^', '#1baf7a', 'interference point'),
+    'sm': ('*', 'k', 'SM anchor'),
+}
+
+
+def plot_network_misclosure(misclosure, yield_ratio, network_tex, outname, notes=None, n_labels=3, per_seed=None):
+    '''
+    Misclosure m_n of every training network against the size of its training point (inclusive yield relative to the
+    SM, lambda(theta_1) / lambda_SM, linear) on a log scale, by kind of point; suspects ringed in their attribution colours and the
+    n_labels largest m_n labelled with their training point in a column on the right, joined by leader lines. The
+    kind of point is shown by marker shape in neutral grey; suspects are filled in their status colour. With per_seed, every seed's m_n is drawn as a small
+    marker, joined by a thin line from the smallest to the largest, with the seed average as the large marker.
+
+    Args:
+        misclosure: {network name: m_n} averaged over seeds (network_misclosure)
+        yield_ratio: {network name: lambda(theta_1) / lambda_SM}
+        network_tex: {network name: TeX label of its training point}
+        outname: file to save the plot to
+        notes: {network name: 'dropped' or 'retrain'}
+        n_labels: networks labelled, largest m_n first
+        per_seed: {network name: [m_n of every seed]} (network_misclosure with per_seed=True), optional
+    '''
+    notes = notes or {}
+    names = [n for n in misclosure if n in yield_ratio]
+    kind = {n: 'sm' if n == 'sm' else 'cross' if n.startswith('cross_terms/') else 'scan' for n in names}
+    m = np.array([misclosure[n] for n in names])
+    x = np.array([yield_ratio[n] for n in names])
+    shown = np.concatenate([m] + ([np.concatenate([per_seed[n] for n in names])] if per_seed else []))
+    shown = shown[shown > 0]
+    low, high = shown.min() / 2, shown.max() * 2
+
+    fig, ax = plt.subplots(figsize=(12, 9))
+    # scheme A: the kind of point by marker shape, all in neutral grey; suspects filled in their status colour
+    # the SM anchor is blue-green (cool against the warm suspect colours) and, with the suspects, drawn in front of
+    # everything else
+    base, seed_grey, anchor = '#9a9a9a', '#c8c8c8', '#0f8b8d'
+    color = {n: anchor if kind[n] == 'sm' else NOTE_COLORS.get(notes.get(n), base) for n in names}
+    front = {n: kind[n] == 'sm' or n in notes for n in names}
+    if per_seed:
+        for n, xi in zip(names, x):
+            seeds = np.asarray(per_seed[n])
+            seeds = seeds[seeds > 0]
+            if len(seeds):
+                marker = POINT_KINDS[kind[n]][0]
+                c = color[n] if front[n] else seed_grey
+                z = 4 if front[n] else 1
+                ax.vlines(xi, seeds.min(), seeds.max(), colors=c, linewidth=1, alpha=0.6, zorder=z)
+                ax.scatter(np.full(len(seeds), xi), seeds, marker=marker, s=10, color=c, alpha=0.6, zorder=z)
+    for k, (marker, _, label) in POINT_KINDS.items():
+        of_kind = np.array([kind[n] == k for n in names])
+        size = 200 if k == 'sm' else 60
+        plain = of_kind & np.array([not front[n] for n in names])
+        ax.scatter(
+            x[plain & (m > 0)],
+            m[plain & (m > 0)],
+            marker=marker,
+            s=size,
+            color=base,
+            label=None if k == 'sm' else label,
+            zorder=3,
+        )
+        if k == 'sm':
+            sm = of_kind & (m > 0)
+            ax.scatter(
+                x[sm], m[sm], marker=marker, s=size, color=anchor, edgecolors='k', linewidths=0.8, label=label, zorder=6
+            )
+        zero = of_kind & (m <= 0)
+        if zero.any():
+            ax.scatter(
+                x[zero],
+                np.full(zero.sum(), low),
+                marker=marker,
+                s=size,
+                facecolors='none',
+                edgecolors=[color[n] for n, z in zip(names, zero) if z],
+                clip_on=False,
+                zorder=3,
+            )
+        for status, c in NOTE_COLORS.items():
+            sel = of_kind & np.array([notes.get(n) == status for n in names]) & (m > 0)
+            if sel.any():
+                ax.scatter(
+                    x[sel], m[sel], marker=marker, s=size * 1.6, color=c, edgecolors='k', linewidths=0.8, zorder=6
+                )
+    # legend entries for the statuses (the kinds are named by their grey markers)
+    for status, c in NOTE_COLORS.items():
+        if status in notes.values():
+            ax.scatter([], [], marker='s', s=80, color=c, label=status)
+    # labels stacked in a column at the top right, largest m_n first, each joined to its marker by a leader line
+    for row, i in enumerate(np.argsort(-m)[:n_labels]):
+        ax.annotate(
+            network_tex[names[i]],
+            (x[i], m[i]),
+            xytext=(0.97, 0.95 - 0.07 * row),
+            textcoords='axes fraction',
+            ha='right',
+            va='center',
+            fontsize=14,
+            arrowprops={'arrowstyle': '-', 'color': '#9a9a9a', 'linewidth': 0.8},
+        )
+    # the yield ratios span only about 1-1.2 (training points sized by their yield change), so x stays linear
+    ax.set_yscale('log')
+    ax.set_ylim(low, high)
+    ax.set_xlabel(r'$\lambda(\theta_1) / \lambda(\mathrm{sm})$')
+    ax.set_ylabel(r'$m_n$ / $\lambda(\mathrm{sm})$')
+    ax.legend(fontsize=16, loc='upper left')
+    mathtext_log = logging.getLogger('matplotlib.mathtext')
+    mathtext_log.addFilter(_no_tex_mapping)
+    try:
+        mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
+        fig.savefig(outname, bbox_inches='tight')
+    finally:
+        mathtext_log.removeFilter(_no_tex_mapping)
+    plt.close(fig)

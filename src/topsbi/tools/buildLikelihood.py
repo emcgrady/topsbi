@@ -2,7 +2,6 @@ from topsbi.model.net import Net
 from topsbi.tools.data import get_lower_tri, load_zero_terms, zero_term_mask
 
 import torch, tqdm, yaml
-import numpy as np
 
 torch.set_num_threads(1)
 
@@ -68,7 +67,10 @@ class full_likelihood:
             sm_ratio = sm_network(features)
 
         zero_terms = load_zero_terms(sm_network.config)
-        same = lambda terms: {tuple(sorted(p)) for p in terms} == {tuple(sorted(p)) for p in zero_terms}
+
+        def same(terms):
+            return {tuple(sorted(p)) for p in terms} == {tuple(sorted(p)) for p in zero_terms}
+
         for i, network_yaml in tqdm.tqdm(enumerate(self.config["networks"]), total=len(self.config['networks'])):
             network = likelihood(network_yaml, len(self.config["features"]))
             if network.config['wcs'] != self.wcs or not same(load_zero_terms(network.config)):
@@ -103,7 +105,7 @@ class ensemble:
         self,
         config: dict,
         features: torch.tensor,
-        hist_residuals: bool = False,
+        per_seed=None,
     ):
         """
         Average the per-event morphing coefficients of several seeds.
@@ -111,6 +113,7 @@ class ensemble:
         Args:
             config: dictionary with the shared settings and, per seed, the sm and dedicated network configs
             features: non-normalized features to be evaluated by the networks
+            per_seed: optional callable per_seed(seed, fit) given each seed's full_likelihood before it is discarded
         """
         likelihood_config = {
             'device': config['device'],
@@ -121,16 +124,14 @@ class ensemble:
         self.zeros_mask = None
         self.gammas = None
         self.gammas2 = None
-        self.residuals = []
         # events kept by every seed; an event dropped by any seed has no complete average
         self.infFilter = torch.ones(n_events, dtype=torch.bool)
         for seed in config['seeds'].keys():
             likelihood_config['sm'] = config['seeds'][seed]['sm']
             likelihood_config['networks'] = config['seeds'][seed]['networks']
             temp_likelihood = full_likelihood(likelihood_config, features)
-            if hist_residuals:
-                bins = np.logspace(-10, 3, 200)
-                self.residuals += [np.histogram(temp_likelihood.residuals, bins=bins)]
+            if per_seed is not None:
+                per_seed(seed, temp_likelihood)
             if self.zeros_mask is None:
                 self.zeros_mask = temp_likelihood.zerosMask
                 self.gammas = torch.zeros((int(self.zeros_mask.sum()), n_events), dtype=temp_likelihood.gammas.dtype)
