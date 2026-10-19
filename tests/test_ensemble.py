@@ -58,9 +58,12 @@ def test_ensemble_averages_aligned_events(ensemble_config):
     assert torch.allclose(ens(wcs), get_lower_tri(wcs)[ZEROS_MASK] @ expected)
 
 
-def test_ensemble_residual_histograms(ensemble_config):
-    ens = build.ensemble(ensemble_config, torch.zeros(N_EVENTS, 2), hist_residuals=True)
-    assert [int(h[0].sum()) for h in ens.residuals] == [int(SEEDS[s][0].sum()) for s in SEEDS]
+def test_ensemble_passes_each_seed_fit_to_per_seed(ensemble_config):
+    residuals = {}
+    build.ensemble(
+        ensemble_config, torch.zeros(N_EVENTS, 2), per_seed=lambda seed, fit: residuals.update({seed: fit.residuals})
+    )
+    assert [len(residuals[s]) for s in SEEDS] == [int(SEEDS[s][0].sum()) for s in SEEDS]
 
 
 def test_ensemble_rejects_seeds_at_different_points(ensemble_config):
