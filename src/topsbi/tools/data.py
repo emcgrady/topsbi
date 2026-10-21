@@ -102,13 +102,13 @@ def lumi_per_event(years: torch.tensor, config: dict):
 
     Args:
         years: era index of each event (year_int feature)
-        config: dictionary with 'lumi' (list of per-era luminosities) and 'device'
+        config: dictionary with 'lumi' (list of per-era luminosities)
     Returns:
-        float64 tensor [N] of luminosities
+        float64 tensor [N] of luminosities, on the device of years
     """
     if 'lumi' not in config:
         raise KeyError("'lumi' is required: a list of luminosities indexed by the year_int feature")
-    return torch.tensor(config['lumi'], dtype=torch.float64, device=config['device'])[years.long()]
+    return torch.tensor(config['lumi'], dtype=torch.float64, device=years.device)[years.long()]
 
 
 # tensor order of combined nominal / variation samples for nuisance training; w_ref is each event's weight at the
