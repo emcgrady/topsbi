@@ -1,34 +1,34 @@
 import pytest
 import torch
 
-import topsbi.tools.buildLikelihood as build
+import topsbi.tools.build_ratio as build
 from topsbi.tools.data import get_lower_tri
 
 N_EVENTS = 6
 # two WCs: get_lower_tri([1, a, b]) has 6 terms, 3 of which are kept
-ZEROS_MASK = torch.tensor([True, True, False, True, False, False])
+MASK = torch.tensor([True, True, False, True, False, False])
 SEEDS = {
-    # seed: (events kept by full_likelihood, gammas for the kept events)
+    # seed: (events kept by RatioFit, Gamma for the kept events)
     's1': (torch.tensor([1, 1, 1, 1, 1, 1], dtype=torch.bool), torch.arange(18.0).reshape(3, 6)),
     's2': (torch.tensor([1, 1, 0, 1, 1, 1], dtype=torch.bool), 10 + torch.arange(15.0).reshape(3, 5)),
 }
 
 
-class FakeFullLikelihood:
-    """Stands in for full_likelihood with known per-event coefficients."""
+class FakeRatioFit:
+    """Stands in for RatioFit with known per-event coefficients Gamma."""
 
-    zeros_masks = {}
+    masks = {}
 
     def __init__(self, config, features):
-        self.infFilter, self.gammas = SEEDS[config['sm']]
-        self.zerosMask = self.zeros_masks.get(config['sm'], ZEROS_MASK)
-        self.residuals = torch.rand(int(self.infFilter.sum()))
+        self.finite, self.Gamma = SEEDS[config['sm']]
+        self.mask = self.masks.get(config['sm'], MASK)
+        self.residuals = torch.rand(int(self.finite.sum()))
 
 
 @pytest.fixture
 def ensemble_config(monkeypatch):
-    monkeypatch.setattr(build, 'full_likelihood', FakeFullLikelihood)
-    FakeFullLikelihood.zeros_masks = {}
+    monkeypatch.setattr(build, 'RatioFit', FakeRatioFit)
+    FakeRatioFit.masks = {}
     return {
         'device': 'cpu',
         'c0': [1.0, 0.0, 0.0],
@@ -38,37 +38,37 @@ def ensemble_config(monkeypatch):
 
 
 def full_size(seed):
-    keep, gammas = SEEDS[seed]
+    keep, Gamma = SEEDS[seed]
     out = torch.zeros(3, N_EVENTS)
-    out[:, keep] = gammas
+    out[:, keep] = Gamma
     return out
 
 
 def test_ensemble_averages_aligned_events(ensemble_config):
-    ens = build.ensemble(ensemble_config, torch.zeros(N_EVENTS, 2))
+    ens = build.Ensemble(ensemble_config, torch.zeros(N_EVENTS, 2))
 
     kept_by_all = SEEDS['s1'][0] & SEEDS['s2'][0]
     expected = ((full_size('s1') + full_size('s2')) / 2)[:, kept_by_all]
-    assert torch.equal(ens.infFilter, kept_by_all)
-    assert torch.allclose(ens.gammas, expected)
+    assert torch.equal(ens.finite, kept_by_all)
+    assert torch.allclose(ens.Gamma, expected)
     expected2 = ((full_size('s1') ** 2 + full_size('s2') ** 2) / 2)[:, kept_by_all]
-    assert torch.allclose(ens.gammas2, expected2)
+    assert torch.allclose(ens.Gamma2, expected2)
 
     wcs = [1.0, 2.0, 3.0]
-    assert torch.allclose(ens(wcs), get_lower_tri(wcs)[ZEROS_MASK] @ expected)
+    assert torch.allclose(ens(wcs), get_lower_tri(wcs)[MASK] @ expected)
 
 
 def test_ensemble_passes_each_seed_fit_to_per_seed(ensemble_config):
     residuals = {}
-    build.ensemble(
+    build.Ensemble(
         ensemble_config, torch.zeros(N_EVENTS, 2), per_seed=lambda seed, fit: residuals.update({seed: fit.residuals})
     )
     assert [len(residuals[s]) for s in SEEDS] == [int(SEEDS[s][0].sum()) for s in SEEDS]
 
 
 def test_ensemble_rejects_seeds_at_different_points(ensemble_config):
-    other = ZEROS_MASK.clone()
+    other = MASK.clone()
     other[2] = True
-    FakeFullLikelihood.zeros_masks = {'s2': other}
+    FakeRatioFit.masks = {'s2': other}
     with pytest.raises(ValueError):
-        build.ensemble(ensemble_config, torch.zeros(N_EVENTS, 2))
+        build.Ensemble(ensemble_config, torch.zeros(N_EVENTS, 2))
