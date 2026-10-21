@@ -357,6 +357,8 @@ def summary_plots(
     return details
 
 
+# gradients only inside the optimizer loop; evaluating the full training set with autograd costs ~10 GB
+@torch.no_grad()
 def main(config):
     """
     Train one network from a config (examples/training/README.md): load the data and weights, train with early
@@ -477,11 +479,12 @@ def main(config):
                 lumi=test_lumi,
             )
         model.net.train()
-        for batch in epoch_batches(train_tensors, config['batchSize'], shuffle):
-            optimizer.zero_grad()
-            loss = loss_fn(*batch)
-            loss.backward()
-            optimizer.step()
+        with torch.enable_grad():
+            for batch in epoch_batches(train_tensors, config['batchSize'], shuffle):
+                optimizer.zero_grad()
+                loss = loss_fn(*batch)
+                loss.backward()
+                optimizer.step()
         model.net.eval()
         # both losses after this epoch's updates, so train_loss[i] and test_loss[i] are the same network state
         train_loss.append(loss_fn(*train_tensors).item())
