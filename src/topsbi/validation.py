@@ -5,6 +5,7 @@ from topsbi.tools.ensembleCache import (
     SeedCollector,
     binned_sums,
     component_labels,
+    is_cross_term,
     merge_sparse,
     quantile_binning,
     write_cache,
@@ -826,7 +827,7 @@ def main(config_path, refit=False):
     # harming other components: the points of a cross-term pair go together, scan points alone
     groups, drop_tests, combined, refit_bias = {}, {}, None, None
     for n in drop:
-        groups.setdefault(os.path.dirname(n) if n.startswith('cross_terms/') else n, []).append(n)
+        groups.setdefault(os.path.dirname(n) if is_cross_term(n) else n, []).append(n)
     if groups:
         threshold = cfg.get('share_threshold', 0.5)
         blamed = {

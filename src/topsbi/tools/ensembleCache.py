@@ -103,6 +103,14 @@ def binned_sums(values, index, n_bins):
     return out.numpy()
 
 
+def is_cross_term(name):
+    """
+    True for a cross-term network: its name (path relative to <seed>_seed/nominal) starts with a WC pair,
+    <wc0>_<wc1>/<point>, while single-WC points are <wc>/<point> and the SM network is sm. WC names contain no '_'.
+    """
+    return '_' in name.split('/')[0]
+
+
 def component_labels(wcs, mask):
     """
     Label and kind of every kept column of T(theta) (get_lower_tri), in the order of the rows of Gamma.

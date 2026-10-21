@@ -5,6 +5,7 @@ from matplotlib.patches import Patch, Rectangle
 from matplotlib.transforms import ScaledTranslation, blended_transform_factory
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from topsbi.tools.metrics import roc_curve, closure_metrics
+from topsbi.tools.ensembleCache import is_cross_term
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -1720,7 +1721,7 @@ def plot_network_misclosure(misclosure, yield_ratio, network_tex, outname, notes
     '''
     notes = notes or {}
     names = [n for n in misclosure if n in yield_ratio]
-    kind = {n: 'sm' if n == 'sm' else 'cross' if n.startswith('cross_terms/') else 'scan' for n in names}
+    kind = {n: 'sm' if n == 'sm' else 'cross' if is_cross_term(n) else 'scan' for n in names}
     m = np.array([misclosure[n] for n in names])
     x = np.array([yield_ratio[n] for n in names])
     shown = np.concatenate([m] + ([np.concatenate([per_seed[n] for n in names])] if per_seed else []))

@@ -72,3 +72,10 @@ def test_ensemble_rejects_seeds_at_different_points(ensemble_config):
     FakeRatioFit.masks = {'s2': other}
     with pytest.raises(ValueError):
         build.Ensemble(ensemble_config, torch.zeros(N_EVENTS, 2))
+
+
+def test_is_cross_term():
+    from topsbi.tools.ensembleCache import is_cross_term
+
+    assert is_cross_term('ctGRe_cQd1/p_one_p_point_five')
+    assert not is_cross_term('ctGRe/p_one') and not is_cross_term('sm')
