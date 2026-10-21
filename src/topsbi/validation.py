@@ -738,7 +738,10 @@ def main(config_path, refit=False):
     name = config['name']
     os.makedirs(f'{name}/plots', mode=0o755, exist_ok=True)
 
-    features, coefs, _ = torch.load(config['data'], weights_only=False)[:]
+    # features and coefs are the first two tensors of every data format (combined: features, coefs, ids, event_id,
+    # syst_ratio, w_ref; older files: features, coefs, ids); the memory map reads only these two from disk
+    tensors = torch.load(config['data'], weights_only=False, mmap=True).tensors
+    features, coefs = tensors[0].clone(), tensors[1].clone()
     if 'lumi' not in config:
         sys.exit('[error]: config needs lumi, the luminosity of each era')
     eras = features[:, config.get('year_loc', 21)].long()
