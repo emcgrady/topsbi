@@ -363,7 +363,8 @@ def main(config):
     """
     Train one network from a config (examples/training/README.md): load the data and weights, train with early
     stopping on the test loss, keep the best checkpoint in <name>/model.pt, and write the final plots and
-    performance.yml to <name>/complete, computed on the holdout when there is one.
+    performance.yml to <name>/complete, computed on the holdout when there is one. <name>/complete/finished is
+    written last, so it exists only for a run that got through every step.
 
     Args:
         config: training configuration dictionary
@@ -564,6 +565,8 @@ def main(config):
             lumi=lumi,
             value_names=groups['value_names'],
         )
+    # last step: complete/finished marks a whole complete/ (model.pt is saved before the final plots and metrics)
+    open(f'{config["name"]}/complete/finished', 'w').close()
     return config
 
 
