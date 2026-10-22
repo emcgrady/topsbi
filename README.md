@@ -1,5 +1,5 @@
 # topsbi
-This repository uses the simulation based inference techniques outlined by [J. Brehmer et al](https://arxiv.org/abs/1805.00020) by training a DNN binary classifier between two points in Wilson coefficient space under the Standard Model effective field theory hypothesis. This classifier can be converted to a likelihood ratio between these two points which can then be used for a binned or unbinned physics analysis. 
+This repository uses the simulation based inference techniques outlined by [J. Brehmer et al](https://arxiv.org/abs/1805.00020) by training a DNN binary classifier between two points $\theta_0$ and $\theta_1$ in Wilson coefficient space under the Standard Model effective field theory hypothesis. Its output is converted to the learned ratio $\hat r(x;\theta_1)$ between these two points, which can then be used for a binned or unbinned physics analysis. Notation and the mapping of code names to symbols are in `AGENTS.md` (Notation).
 ## Installation
 This code uses PyTorch for neural network training and [uv](https://docs.astral.sh/uv/) to manage the environment. These instructions cover the system architecture of camlnd.crc.nd.edu; the same steps work on a laptop for CPU-only development.
 
@@ -16,9 +16,9 @@ source .venv/bin/activate
 ## Network Training
 All of the training is done through `train.py` which takes a single argument, a path to a configuration yaml.
 ```sh
-python -m topsbi.train examples/training/weights_only.yml
+python -m topsbi.train examples/training/eft.yml
 ```
-Examples of these yaml files can be found in the examples directory. As the fields in these configuration files will be updated regularly as various features are added, a separate README can be found in this directory. It also explains the calibration metrics written to `performance.yml` and the plots produced after training.
+Examples of these yaml files can be found in the examples directory, with their keys listed in `examples/training/README.md`. What a training writes, its metrics and plots are described in [`docs/training.md`](docs/training.md); [`docs/`](docs/README.md) covers every stage of the analysis.
 ## Tests
 The synthetic-data tests run on CPU in about a minute:
 ```sh

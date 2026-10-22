@@ -1,0 +1,6 @@
+# WC pairs whose quadratic term is structurally zero in the samples: their get_lower_tri columns are dropped from
+# the training weights and the ensemble fit. Names as in the config's wcs; the order within a pair does not matter.
+zero_terms:
+  - [ctj1, cQd1]
+  - [cQj31, cQd1]
+  - [ctj8, cQd1]

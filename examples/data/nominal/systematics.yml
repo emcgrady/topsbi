@@ -1,0 +1,9 @@
+# names of the syst_ratio columns, in the order of the tensor's axis 1 (nominal train.p / validation.p)
+syst_ratio:
+  - ISR
+  - FSR
+  - renorm
+# order of syst_ratio's last axis (default [Up, Down])
+directions:
+  - Up
+  - Down

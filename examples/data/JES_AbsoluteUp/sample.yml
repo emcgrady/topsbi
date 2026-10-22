@@ -1,0 +1,5 @@
+# a variation's sample.yml: reference and salt_split must equal those of nominal/sample.yml
+reference: gen
+salt_split: 0
+variation: JES_AbsoluteUp
+columns: [features, w_ref, ids, event_id]

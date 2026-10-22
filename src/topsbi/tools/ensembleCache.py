@@ -1,5 +1,5 @@
 from topsbi.tools.data import get_lower_tri
-from topsbi.tools.plots import merge_sparse_bins
+from topsbi.tools.metrics import merge_sparse_bins
 
 import datetime, hashlib, os, shutil, torch, yaml
 import numpy as np
@@ -54,7 +54,7 @@ def quantile_binning(features, feature_config, nbins=20, names=None):
 def merge_sparse(binning, features, feature_config, weights, min_neff=30):
     """
     Merge neighbouring bins of each feature until each holds at least min_neff effective events,
-    n_eff = (sum w)^2 / sum w^2, with the rule of plots.merge_sparse_bins (accumulate from the low edge,
+    n_eff = (sum w)^2 / sum w^2, with the rule of metrics.merge_sparse_bins (accumulate from the low edge,
     fold a sparse remainder into the last bin).
 
     Args:
@@ -103,11 +103,20 @@ def binned_sums(values, index, n_bins):
     return out.numpy()
 
 
+def is_cross_term(name):
+    """
+    True for a cross-term network: its name (path relative to <seed>_seed/nominal) starts with a WC pair,
+    <wc0>_<wc1>/<point>, while single-WC points are <wc>/<point> and the SM network is sm. WC names contain no '_'.
+    """
+    return '_' in name.split('/')[0]
+
+
 def component_labels(wcs, mask):
     """
-    Label and kind of every kept get_lower_tri column, in the order of the rows of gamma.
+    Label and kind of every kept column of T(theta) (get_lower_tri), in the order of the rows of Gamma.
 
-    Column (i, j), j <= i, of get_lower_tri([1, theta_1, ...]) multiplies theta_i * theta_j (theta_0 = 1):
+    Column (i, j), j <= i, of T(theta) for theta = (1, theta_1, ..., theta_n) multiplies theta_i theta_j, where the
+    constant entry counts as index 0 (so (0, 0) is the 1 of the SM term; theta_0 here is not a hypothesis):
     (0, 0) 'sm', (i, 0) the linear term 'wc_i', (i, i) the quadratic term 'wc_i^2', otherwise the interference
     term 'wc_i*wc_j'.
 
@@ -140,9 +149,9 @@ def component_labels(wcs, mask):
 class SeedCollector:
     def __init__(self, seeds):
         """
-        Keep each seed's fit while ensemble discards it: per-event gammas, kept events and fit residuals (layer 1 of
-        the ensemble cache), and Theta, the network names and every network's per-event ratio (layer 2).
-        Pass an instance as ensemble(..., per_seed=collector).
+        Keep each seed's fit while Ensemble discards it: per-event Gamma, kept events and fit residuals (layer 1 of
+        the ensemble cache), and Theta, the network names and R, every network's per-event ratio (layer 2).
+        Pass an instance as Ensemble(..., per_seed=collector).
 
         Args:
             seeds: config['seeds'], for the network names
@@ -155,12 +164,13 @@ class SeedCollector:
         base = os.path.commonpath([os.path.dirname(p) for p in paths])
         self.layer[seed] = {
             'networks': [os.path.relpath(os.path.dirname(p), base) for p in paths],
-            'Theta': fit.trainingMatrix.numpy(),
+            # keys are the cache file names (written by write_cache)
+            'Theta': fit.Theta.numpy(),
             'rank': int(fit.rank),
-            'filter': fit.infFilter.numpy(),
-            'gammas': fit.gammas.numpy(),
-            # every network's ratio for every event (inf where a network diverged; filter marks the usable events)
-            'ratios': fit.ratios.numpy(),
+            'filter': fit.finite.numpy(),
+            'gammas': fit.Gamma.numpy(),
+            # R: every network's ratio for every event (inf where a network diverged; filter marks the usable events)
+            'ratios': fit.R.numpy(),
             # empty unless Theta has more rows than columns and full column rank
             'residuals': fit.residuals.numpy() if fit.residuals.numel() else None,
         }
@@ -179,25 +189,26 @@ def model_hashes(seeds):
     return hashes
 
 
-def write_cache(path, config, dre, layer):
+def write_cache(path, config, ensemble, layer):
     """
-    Write an ensemble cache to path. Layer 1 (event level): mean gammas, mask, events kept by every seed, and per seed
-    the gammas, kept events and fit residuals. Layer 2 (network level): per seed Theta, the network names and every
-    network's per-event ratio. The cache is built in path.tmp and moved into place, and ensemble.yml is written last,
-    so an interrupted write never looks complete.
+    Write an ensemble cache to path. Layer 1 (event level): mean Gamma (gamma_cache.npy), mask, events kept by every
+    seed (filter_cache.npy), and per seed Gamma (gammas.npy), kept events (filter.npy) and fit residuals. Layer 2
+    (network level): per seed Theta, the network names and R, every network's per-event ratio (ratios.npy). The cache
+    is built in path.tmp and moved into place, and ensemble.yml is written last, so an interrupted write never looks
+    complete.
 
     Args:
         path: cache directory, replaced if it exists
         config: validation config (data, c0, wcs, seeds, lumi)
-        dre: the fitted ensemble
+        ensemble: the fitted Ensemble
         layer: SeedCollector.layer
     """
     tmp = f'{path}.tmp'
     shutil.rmtree(tmp, ignore_errors=True)
     os.makedirs(tmp)
-    np.save(f'{tmp}/gamma_cache.npy', dre.gammas.numpy())
-    np.save(f'{tmp}/mask_cache.npy', dre.zeros_mask.numpy())
-    np.save(f'{tmp}/filter_cache.npy', dre.infFilter.numpy())
+    np.save(f'{tmp}/gamma_cache.npy', ensemble.Gamma.numpy())
+    np.save(f'{tmp}/mask_cache.npy', ensemble.mask.numpy())
+    np.save(f'{tmp}/filter_cache.npy', ensemble.finite.numpy())
     for seed, s in layer.items():
         d = f'{tmp}/seed_{seed}'
         os.makedirs(d)
@@ -227,7 +238,11 @@ class EnsembleCache:
     def __init__(self, path, mmap=True):
         """
         Read an ensemble cache written by write_cache. Large per-event arrays are memory-mapped unless mmap is False;
-        layer 2 is read on demand with network(seed) and seed_ratios(seed).
+        layer 2 is read on demand with network(seed) and seed_R(seed).
+
+        Attributes:
+            Gamma: [K, N_finite] seed-mean Gamma; mask: kept columns of T(theta); finite: [N] events kept by every seed
+            seed_Gamma, seed_finite: per seed Gamma and kept events; residuals: per seed lstsq residuals or None
         """
         if not os.path.exists(f'{path}/ensemble.yml'):
             raise FileNotFoundError(f'{path} is not a complete ensemble cache')
@@ -236,26 +251,26 @@ class EnsembleCache:
         mode = 'r' if mmap else None
         self.path = path
         self.mode = mode
-        self.gammas = np.load(f'{path}/gamma_cache.npy', mmap_mode=mode)
+        self.Gamma = np.load(f'{path}/gamma_cache.npy', mmap_mode=mode)
         self.mask = np.load(f'{path}/mask_cache.npy')
-        self.filter = np.load(f'{path}/filter_cache.npy')
+        self.finite = np.load(f'{path}/filter_cache.npy')
         self.seeds = list(self.manifest['seeds'])
-        self.seed_gammas = {s: np.load(f'{path}/seed_{s}/gammas.npy', mmap_mode=mode) for s in self.seeds}
-        self.seed_filter = {s: np.load(f'{path}/seed_{s}/filter.npy') for s in self.seeds}
+        self.seed_Gamma = {s: np.load(f'{path}/seed_{s}/gammas.npy', mmap_mode=mode) for s in self.seeds}
+        self.seed_finite = {s: np.load(f'{path}/seed_{s}/filter.npy') for s in self.seeds}
         self.residuals = {
             s: np.load(f'{path}/seed_{s}/residuals.npy') if os.path.exists(f'{path}/seed_{s}/residuals.npy') else None
             for s in self.seeds
         }
 
     def network(self, seed):
-        """Theta and the network names of one seed (layer 2); row j of Theta belongs to network j."""
+        """Theta and the network names of one seed (layer 2); row a of Theta belongs to network a."""
         with np.load(f'{self.path}/seed_{seed}/network.npz') as f:
             out = {k: f[k] for k in f.files}
         out['networks'] = [str(n) for n in out['networks']]
         return out
 
-    def seed_ratios(self, seed):
-        """Every network's per-event ratio for one seed (layer 2): [n_networks, N], rows ordered as in network(seed)."""
+    def seed_R(self, seed):
+        """R of one seed (layer 2): every network's r_hat per event, [n_networks, N], rows ordered as network(seed)."""
         return np.load(f'{self.path}/seed_{seed}/ratios.npy', mmap_mode=self.mode)
 
     def matches(self, config):
@@ -265,5 +280,5 @@ class EnsembleCache:
         return self.manifest['model_hash'] == model_hashes(config['seeds'])
 
     def __call__(self, theta):
-        """Learned likelihood ratio r_hat(x; theta) for the events kept by every seed."""
-        return get_lower_tri(theta, dtype=torch.float64).numpy()[self.mask] @ self.gammas
+        """Learned ratio r_hat(x; theta) = T(theta)[mask] Gamma for the events kept by every seed."""
+        return get_lower_tri(theta, dtype=torch.float64).numpy()[self.mask] @ self.Gamma

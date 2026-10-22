@@ -1,7 +1,7 @@
 import torch
 
 from topsbi.model.net import Net
-from topsbi.tools.data import sample_boostrap
+from topsbi.tools.data import sample_bootstrap
 
 NETWORK = [
     {'activation': 'LeakyReLU', 'out': 8, 'type': 'Linear'},
@@ -41,7 +41,7 @@ def test_training_stores_training_set_statistics(train_config, tmp_path):
 
     state = torch.load(tmp_path / 'out' / 'model.pt')
     sample = torch.load(tmp_path / 'data' / 'train.p', weights_only=False)
-    train, _ = sample_boostrap(sample, train_config['seed'])
+    train, _ = sample_bootstrap(sample, train_config['seed'])
     train_feats = train[:][0].to(torch.float32)
     assert torch.allclose(state['feature_mean'], train_feats.mean(0))
     assert torch.allclose(state['feature_std'], train_feats.std(0))

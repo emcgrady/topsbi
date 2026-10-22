@@ -4,7 +4,8 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Patch, Rectangle
 from matplotlib.transforms import ScaledTranslation, blended_transform_factory
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from topsbi.tools.metrics import netEval, group_closure
+from topsbi.tools.metrics import roc_curve, closure_metrics
+from topsbi.tools.ensembleCache import is_cross_term
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,7 +14,8 @@ import mplhep as mh
 import logging, os, re, torch, yaml, hist
 
 
-def animate_plots(plots, outname, fps=5):
+# tick labels of the closure groups (era, njets with >= 4 merged): {column: (name, {value: text})}
+def animate_plots(plots, outname, fps=5, sort=True):
     """
     Create an animation from a list of plots.
 
@@ -21,8 +23,10 @@ def animate_plots(plots, outname, fps=5):
         plots: list of file names for the plots to be included in the animation
         outname: name for saving the animation
         fps: frames per second for the animation
+        sort: order the frames by file name; False keeps the given order (and repeated frames)
     """
-    plots = sorted(p for p in plots if p.endswith('.png'))
+    plots = [p for p in plots if p.endswith('.png')]
+    plots = sorted(plots) if sort else plots
     if not plots:
         raise ValueError('animate_plots requires at least one PNG frame')
     fig, ax = plt.subplots()
@@ -39,159 +43,16 @@ def animate_plots(plots, outname, fps=5):
     plt.close(fig)
 
 
-def merge_sparse_bins(x: np.array, weights: np.array, edges: np.array, min_neff: float = 30):
-    '''
-    Merge neighbouring bins until each holds at least min_neff effective events.
-
-    Bins are accumulated from the left; a remainder at the right edge that is still below
-    min_neff is folded into the last complete bin, so the tail ends up in one wide bin.
-
-    Args:
-        x: values of the binned variable
-        weights: event weights used to count effective events, n_eff = (sum w)^2 / sum w^2
-        edges: initial (fine) bin edges
-        min_neff: minimum effective number of events per merged bin
-    Returns:
-        merged bin edges
-    '''
-    sumw, _ = np.histogram(x, bins=edges, weights=weights)
-    sumw2, _ = np.histogram(x, bins=edges, weights=weights**2)
-    merged = [edges[0]]
-    acc, acc2 = 0.0, 0.0
-    for i in range(len(sumw)):
-        acc += sumw[i]
-        acc2 += sumw2[i]
-        if acc2 > 0 and acc**2 / acc2 >= min_neff:
-            merged.append(edges[i + 1])
-            acc, acc2 = 0.0, 0.0
-    if merged[-1] != edges[-1]:
-        if len(merged) > 1:
-            merged[-1] = edges[-1]
-        else:
-            merged.append(edges[-1])
-    return np.array(merged)
-
-
-def kinematic_histogram(
-    x: np.array,
-    params: dict,
-    epoch: int,
-    learned_lr: np.array,
-    true_lr: np.array,
-    outname: str,
-    ylim: list = None,
-    epoch_title: bool = True,
-    log: bool = True,
-    scale_ratio: bool = False,
-    min_neff: float = 30,
-    include_overflow: bool = True,
-):
-    '''
-    Histogram of learned and true likelihood ratio as a function of a kinematic variable.
-
-    The regular binning from params is merged in sparse regions so that every bin has at least
-    min_neff effective events, and the main panel shows yields per unit of the variable.
+def kinematic_ratio_plot(x: np.array, w_hat_dedicated: np.array, w_hat_parametric: np.array, w: np.array, **params):
+    """
+    Kinematic closure of a dedicated and a parametric training: their reweighted bin totals w_hat_b against the
+    direct w_b, with the ratio w_b / w_hat_b.
 
     Args:
         x: Kinematic to be plotted
-        params: dictionary containing plotting information
-        epoch: epoch number for plot title
-        learned_lr: learned likelihood ratio for each event (times the theta_0 weight)
-        true_lr: true likelihood ratio for each event (times the theta_0 weight)
-        outname: name for saving the plot
-        min_neff: minimum effective number of events per bin
-        include_overflow: put events outside [min, max] into the first and last bins
-    '''
-    x = np.asarray(x, dtype=np.float64)
-    learned_lr = np.asarray(learned_lr, dtype=np.float64)
-    true_lr = np.asarray(true_lr, dtype=np.float64)
-    fine = np.linspace(params['min'], params['max'], params['nbins'] + 1)
-    if include_overflow:
-        # keep the tails in the test: clip into the outermost bins
-        x = np.clip(x, fine[0], np.nextafter(fine[-1], fine[0]))
-    bins = merge_sparse_bins(x, true_lr, fine, min_neff)
-    widths = np.diff(bins)
-
-    n_learned, _ = np.histogram(x, bins=bins, weights=learned_lr)
-    n_correct, _ = np.histogram(x, bins=bins, weights=true_lr)
-    sum_ll, _ = np.histogram(x, bins=bins, weights=learned_lr**2)
-    sum_cc, _ = np.histogram(x, bins=bins, weights=true_lr**2)
-    sum_lc, _ = np.histogram(x, bins=bins, weights=learned_lr * true_lr)
-    lErr = np.sqrt(sum_ll)
-    cErr = np.sqrt(sum_cc)
-
-    mh.style.use("CMS")
-    ax = []
-    fig = plt.figure()
-    grid = fig.add_gridspec(2, 1, hspace=0.1, height_ratios=[5, 1])
-    ax += [fig.add_subplot(grid[0])]
-    ax += [fig.add_subplot(grid[1], sharex=ax[0])]
-    if epoch_title:
-        fig.suptitle(f'Epoch {epoch:04d}')
-    else:
-        mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax[0])
-
-    # bins have different widths, so show yields per unit of the variable
-    mh.histplot(n_correct / widths, bins, yerr=cErr / widths, ax=ax[0], label=r'$r\,(x,z;\theta_1,\theta_0)$')
-    mh.histplot(
-        n_learned / widths,
-        bins,
-        yerr=lErr / widths,
-        ax=ax[0],
-        linestyle='dashdot',
-        label=r'$\hat{r}\,(x;\theta_1,\theta_0)$',
-    )
-
-    ratio = np.divide(n_learned, n_correct, where=(n_correct > 0), out=np.zeros(n_learned.shape))
-    rVar = np.maximum(sum_ll - 2 * ratio * sum_lc + ratio**2 * sum_cc, 0)
-    rErr = np.divide(np.sqrt(rVar), n_correct, where=(n_correct > 0), out=np.zeros(n_learned.shape))
-
-    # merging leaves sparse bins only when the whole variable has too few effective events
-    n_eff = np.divide(n_correct**2, sum_cc, where=(sum_cc > 0), out=np.zeros(n_correct.shape))
-    sparce = n_eff < min_neff
-    ratio[sparce] = np.nan
-    rErr[sparce] = np.nan
-
-    centers = (bins[:-1] + bins[1:]) / 2
-    ax[1].errorbar(centers, ratio, xerr=widths / 2, yerr=rErr, fmt='none', color='k')
-    ax[1].hlines(1, bins[0], bins[-1], color='k', linestyle='dashed', alpha=0.5)
-    if scale_ratio and (~sparce).any():
-        bin_mask = ~sparce
-        err_max = np.array([((ratio + rErr - 1)[bin_mask]).max(), ((1 - ratio + rErr)[bin_mask]).max()]).max() * 1.05
-        ax[1].set_ylim([1 - err_max, 1 + err_max])
-    else:
-        ax[1].set_ylim(0, 2)
-    ax[0].set_xlabel('')
-    unit = params.get('unit')
-    ax[0].set_ylabel(f'Weighted events / {unit}' if unit else 'Weighted events / bin width')
-    ax[0].set_xlim(bins[0], bins[-1])
-    plt.setp(ax[0].get_xticklabels(), visible=False)
-    ax[1].set_xlabel(params['label'] + (f' [{unit}]' if unit else ''))
-    ax[1].set_ylabel(r'$\frac{\hat{r}(x;\theta_1,\theta_0)}{r(x,z;\theta_1,\theta_0)}$')
-    ax[0].legend()
-    if log:
-        ax[0].set_yscale('log')
-    if ylim is None:
-        ylim = ax[0].get_ylim()
-        fig.savefig(outname, bbox_inches='tight')
-        plt.close(fig)
-        return ylim
-    else:
-        ax[0].set_ylim(ylim)
-        fig.savefig(outname, bbox_inches='tight')
-        plt.close(fig)
-
-
-def kinematic_ratio_plot(x: np.array, dlr: np.array, plr: np.array, true_lr: np.array, **params):
-    """
-    Plots histogram and ratio for dedicated and parametric training.
-    Ratios are calculated with respect to HistEFT.
-
-    Args:
-        x: Kinemtaic to be plotted
-        dlr: dedicated likelihood ratio
-        plr: parametric likelihood ratio
-        fitCoefs: EFTFitCoefficients used to calculate the event weights
+        w_hat_dedicated: r_hat(x_i; theta_1) w^s(x_i, z_i; theta_0) of the dedicated network, per event
+        w_hat_parametric: r_hat(x_i; theta_1) w^s(x_i, z_i; theta_0) of the parametric network, per event
+        w: w^s(x_i, z_i; theta_1) per event
         params: dictionary containing plotting information
     """
     # initialize the figure
@@ -221,9 +82,9 @@ def kinematic_ratio_plot(x: np.array, dlr: np.array, plr: np.array, true_lr: np.
         )
     )
 
-    correct_hist.fill(correct=x, weight=true_lr)
-    dedicated_hist.fill(dedicated=x, weight=dlr)
-    parametric_hist.fill(parametric=x, weight=plr)
+    correct_hist.fill(correct=x, weight=w)
+    dedicated_hist.fill(dedicated=x, weight=w_hat_dedicated)
+    parametric_hist.fill(parametric=x, weight=w_hat_parametric)
 
     # calculate error
     cNum, bins = correct_hist.to_numpy()
@@ -234,9 +95,9 @@ def kinematic_ratio_plot(x: np.array, dlr: np.array, plr: np.array, true_lr: np.
     pErr = []
 
     for i in range(params['nbins'] - 1):
-        cErr.append((true_lr[(x >= bins[i]) & (x < bins[i + 1])] ** 2).sum())
-        dErr.append((dlr[(x >= bins[i]) & (x < bins[i + 1])] ** 2).sum())
-        pErr.append((plr[(x >= bins[i]) & (x < bins[i + 1])] ** 2).sum())
+        cErr.append((w[(x >= bins[i]) & (x < bins[i + 1])] ** 2).sum())
+        dErr.append((w_hat_dedicated[(x >= bins[i]) & (x < bins[i + 1])] ** 2).sum())
+        pErr.append((w_hat_parametric[(x >= bins[i]) & (x < bins[i + 1])] ** 2).sum())
     cErr = np.sqrt(np.hstack(cErr))
     dErr = np.sqrt(np.hstack(dErr))
     pErr = np.sqrt(np.hstack(pErr))
@@ -302,183 +163,120 @@ def kinematic_ratio_plot(x: np.array, dlr: np.array, plr: np.array, true_lr: np.
         fig.show()
 
 
-def loss_curve(ax: Axes, train_loss: list[float], test_loss: list[float]) -> None:
+def loss_plot(train_loss: list[float], test_loss: list[float], best_epoch: int = None, outname: str = 'loss.png'):
     """
-    Plot training and test loss over epochs.
+    Training and test loss over epochs, each relative to its value at the best network (the lowest test loss, saved
+    as model.pt), L - L_best, and the loss history as an .npz next to the plot (train, test; entry 0 before
+    training), so the plot can be redrawn without retraining.
+
+    The two samples have different loss levels (their events differ), which the subtraction removes. The y axis is
+    linear up to the largest change after the first epoch and logarithmic beyond it, so the first epoch's drop and the
+    much smaller later changes are both visible. The test curve is 0 at the best network and above it elsewhere; overfitting shows as the test curve rising after the best
+    network while the training curve keeps falling.
 
     Args:
-        ax: The matplotlib Axes to plot on.
-        train_loss: loss for training data
-        test_loss: loss for testing data
+        train_loss: loss for training data, entry 0 before training and entry i after epoch i - 1 (at least 2 entries)
+        test_loss: loss for testing data, as train_loss
+        best_epoch: epoch of the best network; None for the intermediate summaries (the lowest test loss so far)
+        outname: file to write; the history goes to the same name with .npz
     """
-    ax.plot(train_loss, label="Training dataset", linewidth=3)
-    ax.plot(test_loss, label="Testing dataset", linewidth=3)
+    train, test = np.asarray(train_loss, dtype=np.float64), np.asarray(test_loss, dtype=np.float64)
+    np.savez(os.path.splitext(outname)[0] + '.npz', train=train, test=test)
+    epochs = np.arange(len(train))
+    # the network after best_epoch's updates is entry best_epoch + 1
+    best = best_epoch + 1 if best_epoch is not None else int(np.argmin(test[1:])) + 1
+
+    train, test = train - train[best], test - test[best]
+    # symmetric log scale: linear up to the largest change after the first epoch, logarithmic beyond it, so the
+    # first epoch's drop and the much smaller later changes are both visible
+    later = np.abs(np.concatenate([train[1:], test[1:]]))
+    linthresh = later.max() if later.size and later.max() > 0 else max(np.abs(train[0]), 1e-12)
+
+    mh.style.use('CMS')
+    fig, ax = plt.subplots()
+    ax.plot(epochs, train, label='Train', linewidth=3)
+    ax.plot(epochs, test, label='Test', linewidth=3)
+    ax.set_yscale('symlog', linthresh=linthresh)
+    ax.axhline(0, color='grey', linestyle=':')
+    ax.axvline(best, color='grey', linestyle='--', label='Best epoch' + ('' if best_epoch is not None else ' so far'))
     ax.set_xlabel('Epoch')
-    ax.set_ylabel('Loss')
+    ax.set_ylabel(r'$L - L_{\mathrm{best}}$')
     ax.legend()
+    mh.cms.label('Preliminary', data=False, lumi=None, com=None, ax=ax)
+    fig.savefig(outname, bbox_inches='tight')
+    plt.close(fig)
 
 
 def lr_curve(
     ax: Axes,
     lr_history: list[float],
 ) -> None:
-    ax.plot(lr_history, linewidth=3, color='tab:orange')
+    """
+    Plot the learning rate over epochs, on a log scale when it changes by more than a factor 10 (the plateau
+    scheduler's steps of factor 0.1, a cosine decay to eta_min).
+
+    Args:
+        ax: The matplotlib Axes to plot on.
+        lr_history: learning rate per epoch
+    """
+    lr = np.asarray(lr_history, dtype=np.float64)
+    ax.plot(lr, linewidth=3, color='tab:orange')
+    if lr.size and lr.min() > 0 and lr.max() / lr.min() > 10:
+        ax.set_yscale('log')
     ax.set_xlabel('Epoch')
     ax.set_ylabel('Learning Rate')
 
 
-def networkPlots(
-    features,
-    p0,
-    p1,
-    net,
-    train_loss,
-    test_loss,
-    label,
-    method='stitched',
-    lr_history=None,
-    group_cols=(21, 19),
-    group_caps={19: 4},
-    group_labels={21: ('', {0: '2016APV', 1: '2016', 2: '2017', 3: '2018'}), 19: ('jets', {4: '≥4'})},
-):
+def training_plots(net, train_loss, test_loss, label, lr_history=None, performance=None):
+    """
+    Loss and learning-rate curves and the network for trainings without a per-event true ratio r(x, z; theta, nu)
+    (kinematic_shift).
+
+    Args:
+        net: trained Net, saved as <label>/model.pt
+        train_loss: loss on the training split per epoch
+        test_loss: loss on the test split per epoch
+        label: output directory
+        lr_history: learning rate per epoch
+        performance: entries written to <label>/performance.yml (written only if given)
+    """
     mh.style.use("CMS")
     os.makedirs(f'{label}', mode=0o755, exist_ok=True)
     torch.save(net.state_dict(), f'{label}/model.pt')
 
-    performance = {}
-    f = net(features).cpu().detach().numpy().flatten()
-    p0 = p0.detach().cpu().numpy().flatten()
-    p1 = p1.detach().cpu().numpy().flatten()
+    # loss and learning rate only once an epoch has run (the epoch-0 summary has nothing to show)
+    if len(train_loss) > 1:
+        loss_plot(train_loss, test_loss, (performance or {}).get('best_epoch'), f'{label}/loss.png')
 
-    # convert tensors to np arrays
-    if (method == 'stitched') or (method == 'alice') or (method == 'weights_only'):
-        noOnes = f != 1
-        f = f[noOnes]
-        p0 = p0[noOnes]
-        p1 = p1[noOnes]
-        lrhat = f / (1 - f)
-    elif method == 'weight_shift':
-        f = 2 * f - 1
-        lrhat = np.exp(f)
-
-    lr = p1 / p0
-    lr_norm_factor = p0 / p0.mean()
-
-    # closure groups must come from network inputs: era (21) and njets (19, >= 4 merged) by default
-    feats_np = features.detach().cpu().numpy()
-    groups = np.column_stack(
-        [np.minimum(feats_np[:, c], group_caps[c]) if c in group_caps else feats_np[:, c] for c in group_cols]
-    )
-    if method != 'weight_shift':
-        groups = groups[noOnes]
-
-    # loss curves
-    fig, ax = plt.subplots()
-    loss_curve(ax, train_loss, test_loss)
-    mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-    fig.savefig(f'{label}/loss.png', bbox_inches='tight')
-    ax.set_yscale('log')
-    fig.savefig(f'{label}/lossLog.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
-
-    if lr_history is not None:
+    if lr_history is not None and len(train_loss) > 1:
         fig, ax = plt.subplots()
         lr_curve(ax, lr_history)
-        mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-        fig.savefig(f'{label}/lr.png', bbox_inches='tight')
-        plt.clf()
-        plt.close()
+        mh.cms.label("Preliminary", data=False, lumi=None, com=None, ax=ax)
+        fig.savefig(f'{label}/learning_rate.png', bbox_inches='tight')
+        plt.close(fig)
 
-    # get network performance metrics
-    fpr, tpr, auc = netEval(f, p0, p1)
+    if performance is not None:
+        with open(f'{label}/performance.yml', 'w') as f:
+            f.write(yaml.dump(performance))
 
-    performance['auc'] = round(auc, 5)
 
-    # make ROC curves
-    fig, ax = plt.subplots()
-    ax.plot(fpr, tpr, label='Network Performance', linewidth=3)
-    ax.plot([0, 1], [0, 1], ':', label='Baseline', linewidth=3)
-    ax.legend()
-    ax.set_xlabel('False Positive Rate')
-    ax.set_ylabel('True Positive Rate')
-    mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-    fig.savefig(f'{label}/roc.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
+def group_pull_plot(pulls, cell_groups, group_cols, group_labels, xlabel, ylabel, outname):
+    """
+    Pull of every closure cell, cells ordered by group, with +-1 and +-2 sigma bands and one tick label per group.
 
-    # lr calibration difference
-    fig, ax = plt.subplots()
-    lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20, include_stdv=True)
-    ax.legend()
-    fig.savefig(f'{label}/std_diff_excl.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
-
-    fig, ax = plt.subplots()
-    lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20, threshold=0.0, include_stdv=True)
-    ax.legend()
-    fig.savefig(f'{label}/std_diff_incl.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
-
-    fig, ax = plt.subplots()
-    lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20)
-    ax.legend()
-    fig.savefig(f'{label}/mean_diff_excl.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
-
-    fig, ax = plt.subplots()
-    lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 20, threshold=0.0)
-    ax.legend()
-    fig.savefig(f'{label}/mean_diff_incl.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
-
-    # get metrics with higher bins
-    fig, ax = plt.subplots()
-    pull, pull_err, ci_diff, ci_diff_err = lr_calibration_difference(ax, lr, lrhat, lr_norm_factor, 50, threshold=0.0)
-    plt.clf()
-    plt.close()
-
-    performance['pull'] = round(pull, 5)
-    performance['pull_err'] = round(pull_err, 5)
-    performance['ci_diff'] = [round(v, 5) for v in ci_diff]
-    performance['ci_diff_err'] = [round(v, 5) for v in ci_diff_err]
-
-    # lr calibration curves
-    fig, ax = plt.subplots()
-    lr_calibration_curve(ax, lr, lrhat, lr_norm_factor, 50)
-    fig.savefig(f'{label}/lr_excl.png', bbox_inches='tight')
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    fig.savefig(f'{label}/lr_excl_log.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
-
-    fig, ax = plt.subplots()
-    performance['rms_bias'] = round(lr_calibration_curve(ax, lr, lrhat, lr_norm_factor, 50, threshold=0.0), 5)
-    fig.savefig(f'{label}/lr_incl.png', bbox_inches='tight')
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    fig.savefig(f'{label}/lr_incl_log.png', bbox_inches='tight')
-    plt.clf()
-    plt.close()
-
-    # group closure test
-    closure = group_closure(lrhat, lr, lr_norm_factor, groups)
-    performance['group_chi2_excess'] = round(closure['chi2_excess'], 5)
-    performance['group_chi2_excess_err'] = round(closure['chi2_excess_err'], 5)
-    performance['group_rms_bias'] = round(closure['rms_bias'], 5)
-    performance['group_worst_pull'] = round(closure['worst_pull'], 3)
-
+    Args:
+        pulls: pull of each cell
+        cell_groups: group (tuple of group-column values) of each cell, cells of one group adjacent
+        group_cols: feature columns that define the groups
+        group_labels: {column: (name, {value: text})} for the group tick labels
+        xlabel, ylabel: axis labels
+        outname: file to write
+    """
     fig, ax = plt.subplots()
     ax.axhspan(-2, 2, color='#E6EEE6', label=r'$\pm 2\sigma$')
     ax.axhspan(-1, 1, color='#4086B8', alpha=0.6, label=r'$\pm 1\sigma$')
-    ax.plot(closure['pulls'], '.k')
-    cells = closure['cells']
-    starts = [i for i in range(len(cells)) if i == 0 or cells[i][0] != cells[i - 1][0]] + [len(cells)]
+    ax.plot(pulls, '.k')
+    starts = [i for i in range(len(cell_groups)) if i == 0 or cell_groups[i] != cell_groups[i - 1]] + [len(cell_groups)]
     for s in starts[1:-1]:
         ax.axvline(s - 0.5, color='grey', linewidth=0.5)
 
@@ -492,129 +290,255 @@ def networkPlots(
 
     ax.set_xticks(
         [(a + b - 1) / 2 for a, b in zip(starts[:-1], starts[1:])],
-        [describe(cells[s][0]) for s in starts[:-1]],
+        [describe(cell_groups[s]) for s in starts[:-1]],
         rotation=90,
         fontsize=14,
     )
-    ax.set_xlabel(r'Groups quantile binned in $\hat{r}(x;\theta_1)$')
-    ax.set_ylabel(
-        r'$\left[\sum w(\theta_0)\,\hat{r}(x;\theta_1) - \sum w(\theta_0) \,r(x,z;\theta_1)\right]\,/\,\sigma$'
-    )
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.legend()
     mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-    fig.savefig(f'{label}/group_closure.png', bbox_inches='tight')
+    fig.savefig(outname, bbox_inches='tight')
     plt.clf()
     plt.close()
 
+
+def network_plots(
+    features,
+    w0,
+    w1,
+    net,
+    train_loss,
+    test_loss,
+    label,
+    lr_history=None,
+    group_cols=(21, 19),
+    group_caps={19: 4},
+    group_labels=None,
+    performance=None,
+    features_config=None,
+    hypothesis=r'\theta',
+    lumi=None,
+):
+    """
+    Final plots and metrics of a training with a per-event true ratio r(x, z; theta_1) = w^s(theta_1) / w^s(theta_0)
+    (EFT methods and weight_shift), evaluated on the given split.
+
+    Writes <label>/model.pt, the loss and learning-rate curves, roc.png, r_spread.png (the per-event spread of r
+    around r_hat(x; theta_1) in the bins R_b, r_spread_plot), r_closure.png, group_closure.png, and
+    <label>/performance.yml with the given performance entries (e.g. best_epoch, best_test_loss) and the closure
+    metrics shared by every training type (closure_metrics with every event in both samples: auc, rate_*, r_*
+    including r_pull and r_ci_diff, group_*, feature_* and their nominal_* baselines).
+    Events where r_hat is not finite (probability output exactly 1) are left out.
+
+    Args:
+        features: raw network inputs x
+        w0: w^s(x, z; theta_0) per event
+        w1: w^s(x, z; theta_1) per event
+        net: trained Net
+        train_loss: loss on the training split per epoch
+        test_loss: loss on the test split per epoch
+        label: output directory
+        lr_history: learning rate per epoch
+        group_cols: feature columns that define the closure groups (network inputs only)
+        group_caps: {column: cap}, values above the cap are merged into it (e.g. njets >= 4)
+        group_labels: {column: (name, {value: text})} for the group tick labels (None: the plain values)
+        performance: entries written to performance.yml along with the metrics
+        features_config: plotting configuration of every feature for the per-feature closure (None: not computed)
+        hypothesis: hypothesis in the closure-plot labels (theta for eft, theta, nu for weight_shift)
+        lumi: integrated luminosity for the CMS label of r_closure.png
+    Returns:
+        the closure_metrics details, for the per-feature closure plots (closure_plot)
+    """
+    mh.style.use("CMS")
+    os.makedirs(f'{label}', mode=0o755, exist_ok=True)
+    torch.save(net.state_dict(), f'{label}/model.pt')
+
+    performance = dict(performance or {})
+    # raw output f_hat (probability or log ratio) is the ROC score; r_hat comes from the network's own output type
+    with torch.no_grad():
+        f_hat = net(features).cpu().numpy().flatten()
+        r_hat = net.ratio(features).cpu().numpy()
+        log_r_hat = net.log_ratio(features).cpu().numpy()
+    w0 = w0.detach().cpu().numpy().flatten()
+    w1 = w1.detach().cpu().numpy().flatten()
+
+    # a probability network gives an infinite ratio where its output is exactly 1
+    finite = np.isfinite(r_hat)
+    f_hat, r_hat, log_r_hat, w0, w1 = f_hat[finite], r_hat[finite], log_r_hat[finite], w0[finite], w1[finite]
+
+    # r(x, z; theta_1) = w^s(theta_1) / w^s(theta_0) per event
+    r = w1 / w0
+    w0_norm = w0 / w0.mean()
+
+    # closure metrics shared with kinematic_shift: every event is in both samples (i0 = i1); closure groups come from
+    # network inputs, era (21) and njets (19, >= 4 merged) by default
+    feats_np = features.detach().cpu().numpy()[finite]
+    events = np.arange(len(w0))
+    closure, details = closure_metrics(
+        log_r_hat,
+        (feats_np, w0, events),
+        log_r_hat,
+        (feats_np, w1, events),
+        features_config or {},
+        group_cols=group_cols,
+        group_caps=group_caps,
+    )
+
+    # loss and learning rate only once an epoch has run (the epoch-0 summary has nothing to show)
+    if len(train_loss) > 1:
+        loss_plot(train_loss, test_loss, (performance or {}).get('best_epoch'), f'{label}/loss.png')
+
+    if lr_history is not None and len(train_loss) > 1:
+        fig, ax = plt.subplots()
+        lr_curve(ax, lr_history)
+        mh.cms.label("Preliminary", data=False, lumi=None, com=None, ax=ax)
+        fig.savefig(f'{label}/learning_rate.png', bbox_inches='tight')
+        plt.clf()
+        plt.close()
+
+    # ROC curve of the raw output (the auc in performance.yml comes from closure_metrics)
+    fpr, tpr, _ = roc_curve(f_hat, w0, w1)
+
+    # make ROC curves
+    fig, ax = plt.subplots()
+    ax.plot(fpr, tpr, label='Network Performance', linewidth=3)
+    ax.plot([0, 1], [0, 1], color='grey', linestyle='--', label='Baseline', linewidth=2)
+    ax.legend()
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    mh.cms.label("Preliminary", data=False, lumi=None, com=None, ax=ax)
+    fig.savefig(f'{label}/roc.png', bbox_inches='tight')
+    plt.clf()
+    plt.close()
+
+    # per-event spread of the true ratio around the learned one, in the bins R_b of the closure test
+    r_spread_plot(r, log_r_hat, w0_norm, details['r']['edges'], hypothesis, f'{label}/r_spread.png')
+
+    # closure tests shared with kinematic_shift: r_closure plot and group pulls
+    performance.update(closure)
+    r_closure_plot(details['r'], label, hypothesis, lumi=lumi)
+    group_pull_plot(
+        details['group']['summary']['pulls'],
+        [cell[0] for cell in details['group']['cells']],
+        details['group']['cols'],
+        group_labels or {},
+        rf'Groups quantile binned in $\hat{{r}}(x;{hypothesis})$',
+        rf'$\left[\hat{{w}}_b({hypothesis}) - w_b({hypothesis})\right]\,/\,\sqrt{{\mathrm{{Var}}}}$',
+        f'{label}/group_closure.png',
+    )
+
     with open(f'{label}/performance.yml', 'w') as f:
         f.write(yaml.dump(performance))
+    return details
 
 
-def lrMeanPlot(ax: Axes, lrhat: np.array, lr: np.array, p0: np.array, nbins: int, threshold: float = 0.01):
+def r_mean_plot(ax: Axes, r_hat: np.array, r: np.array, w0: np.array, nbins: int, threshold: float = 0.01):
     """
-    Plot the mean and std of the true likelihood ratio p(x,z;c1)/p(x,z;c0) in quantiles of the predicted likelihood ratio lrhat(x;c0,c1).
+    Plot r_bar_b, the w^s(theta_0)-weighted mean of the true ratio r(x, z; theta_1), against r_hat_bar_b, the mean of
+    the learned ratio r_hat(x; theta_1), in quantile bins R_b of r_hat, with the uncertainty sqrt(Var(r_bar_b)).
 
-    If the predicted likelihood ratio is perfect, the mean should lie on the y=x line and the std should be zero.
-    In any case, the mean of the true likelihood should be plt.close to the predicted likelihood ratio.
+    If the learned ratio is perfect, the points lie on the y = x line.
 
     Args:
         ax: The matplotlib Axes to plot on.
-        lrhat: The predicted predicted likelihood ratio phat(x;c1)/phat(x;c0) for each event.
-        lr: The true likelihood ratio p(x,z;c1)/p(x,z;c0) for each event.
-        p0: The true probability distribution under c0 p(x,z;c0) for each event.
+        r_hat: learned ratio r_hat(x; theta_1) for each event.
+        r: true ratio r(x, z; theta_1) = w^s(theta_1) / w^s(theta_0) for each event.
+        w0: w^s(x, z; theta_0) for each event.
         nbins: The number of quantile bins to use.
-        threshold: The quantile threshold to exclude outliers in the decision function.
+        threshold: fraction of events with the lowest and highest r_hat(x; theta_1) left out of the bins.
     """
-    qbins = np.quantile(lrhat, np.linspace(threshold, 1 - threshold, nbins + 1))
+    R_edges = np.quantile(r_hat, np.linspace(threshold, 1 - threshold, nbins + 1))
 
-    sumw, _ = np.histogram(lrhat, bins=qbins, weights=p0)
-    sumwlr, _ = np.histogram(lrhat, bins=qbins, weights=p0 * lr)
-    sumw2lr2, _ = np.histogram(lrhat, bins=qbins, weights=p0**2 * lr**2)
-    sumw2lr, _ = np.histogram(lrhat, bins=qbins, weights=p0**2 * lr)
-    sumw2, _ = np.histogram(lrhat, bins=qbins, weights=p0**2)
-    sumxw, _ = np.histogram(lrhat, bins=qbins, weights=p0 * lrhat)
+    sumw, _ = np.histogram(r_hat, bins=R_edges, weights=w0)
+    sumwr, _ = np.histogram(r_hat, bins=R_edges, weights=w0 * r)
+    sumw2r2, _ = np.histogram(r_hat, bins=R_edges, weights=w0**2 * r**2)
+    sumw2r, _ = np.histogram(r_hat, bins=R_edges, weights=w0**2 * r)
+    sumw2, _ = np.histogram(r_hat, bins=R_edges, weights=w0**2)
+    sumxw, _ = np.histogram(r_hat, bins=R_edges, weights=w0 * r_hat)
 
-    mean = sumwlr / sumw
-    err_mean = np.sqrt(sumw2lr2 - 2 * sumw2lr * mean + sumw2 * mean**2) / sumw
+    r_bar_b = sumwr / sumw
+    r_bar_b_err = np.sqrt(sumw2r2 - 2 * sumw2r * r_bar_b + sumw2 * r_bar_b**2) / sumw
 
     # remove negative weights from early training
-    err_mean[err_mean < 0] = 0
+    r_bar_b_err[r_bar_b_err < 0] = 0
 
-    xcenter = sumxw / sumw
-    xerr = abs(np.stack([xcenter - qbins[:-1], qbins[1:] - xcenter], axis=0))
+    r_hat_bar_b = sumxw / sumw
+    xerr = abs(np.stack([r_hat_bar_b - R_edges[:-1], R_edges[1:] - r_hat_bar_b], axis=0))
 
-    ax.errorbar(xcenter, mean, xerr=xerr, yerr=err_mean, fmt='.')
+    ax.errorbar(r_hat_bar_b, r_bar_b, xerr=xerr, yerr=r_bar_b_err, fmt='.')
 
-    chiSquare = (xcenter - mean) ** 2  # /(lr.max() - lr.min())**2
+    chiSquare = (r_hat_bar_b - r_bar_b) ** 2  # /(r.max() - r.min())**2
     chiSquare = chiSquare[~np.isnan(chiSquare)]
     chiSquare = (chiSquare.sum()).item()
 
-    ax.plot([qbins[0], qbins[-1]], [qbins[0], qbins[-1]], color='grey', linestyle='--', label='_nolegend_')
+    ax.plot([R_edges[0], R_edges[-1]], [R_edges[0], R_edges[-1]], color='grey', linestyle='--', label='_nolegend_')
     mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-    ax.set_xlabel(r'$\hat{\overline{r}}\,(x;\theta_1,\theta_0)$')
-    ax.set_ylabel(r'$\overline{r}\,(x,z;\theta_1,\theta_0)$')
+    ax.set_xlabel(r'$\left\langle \hat{r} \right\rangle_b(\theta_1)$')
+    ax.set_ylabel(r'$\left\langle r \right\rangle_b(\theta_1)$')
 
     return chiSquare
 
 
-def sMeanPlot(ax: Axes, shat: np.array, p0: np.array, p1: np.array, nbins: int, threshold: float = 0.01):
+def s_mean_plot(ax: Axes, s_hat: np.array, w0: np.array, w1: np.array, nbins: int, threshold: float = 0.01):
     """
-    Plot the mean and std of the true decision function s(x,z;c0,c1) in quantiles of the predicted decision function shat(x;c0,c1).
+    Plot s_bar_b, the mean of the true score s(x, z; theta_1) weighted by w^s(theta_0) + w^s(theta_1), against
+    s_hat_bar_b, the mean of the learned score s_hat(x; theta_1), in quantile bins S_b of s_hat, with the uncertainty
+    sqrt(Var(s_bar_b)).
 
-    If the predicted decision function is perfect, the mean should lie on the y=x line and the std should be zero.
-    In any case, the mean of the true decision function should be plt.close to the predicted decision function.
+    If the learned score is perfect, the points lie on the y = x line.
 
     Args:
         ax: The matplotlib Axes to plot on.
-        shat: The predicted  decision function shat(x;c0,c1) for each event.
-        p0: The true probability distribution under c0 p(x,z;c0) for each event.
-        p1: The true probability distribution under c1 p(x,z;c1) for each event.
+        s_hat: learned score s_hat(x; theta_1) for each event.
+        w0: w^s(x, z; theta_0) for each event.
+        w1: w^s(x, z; theta_1) for each event.
         nbins: The number of quantile bins to use.
-        threshold: The quantile threshold to exclude outliers in the decision function.
+        threshold: fraction of events with the lowest and highest s_hat(x; theta_1) left out of the bins.
     """
-    qbins = np.quantile(shat, np.linspace(threshold, 1 - threshold, nbins + 1))
+    S_edges = np.quantile(s_hat, np.linspace(threshold, 1 - threshold, nbins + 1))
 
-    s = p1 / (p1 + p0)
-    w = p1 + p0
+    s = w1 / (w1 + w0)
+    w = w1 + w0
 
-    sumw, _ = np.histogram(shat, bins=qbins, weights=w)
-    sumws, _ = np.histogram(shat, bins=qbins, weights=w * s)
-    sumw2s2, _ = np.histogram(shat, bins=qbins, weights=w**2 * s**2)
-    sumw2s, _ = np.histogram(shat, bins=qbins, weights=w**2 * s)
-    sumw2, _ = np.histogram(shat, bins=qbins, weights=w**2)
-    sumxw, _ = np.histogram(shat, bins=qbins, weights=w * shat)
+    sumw, _ = np.histogram(s_hat, bins=S_edges, weights=w)
+    sumws, _ = np.histogram(s_hat, bins=S_edges, weights=w * s)
+    sumw2s2, _ = np.histogram(s_hat, bins=S_edges, weights=w**2 * s**2)
+    sumw2s, _ = np.histogram(s_hat, bins=S_edges, weights=w**2 * s)
+    sumw2, _ = np.histogram(s_hat, bins=S_edges, weights=w**2)
+    sumxw, _ = np.histogram(s_hat, bins=S_edges, weights=w * s_hat)
 
-    mean = sumws / sumw
-    err_mean = np.sqrt(sumw2s2 - 2 * sumw2s * mean + sumw2 * mean**2) / sumw
+    s_bar_b = sumws / sumw
+    s_bar_b_err = np.sqrt(sumw2s2 - 2 * sumw2s * s_bar_b + sumw2 * s_bar_b**2) / sumw
 
     # remove negative weights from early training
-    err_mean[err_mean < 0] = 0
+    s_bar_b_err[s_bar_b_err < 0] = 0
 
-    xcenter = sumxw / sumw
-    xerr = abs(np.stack([xcenter - qbins[:-1], qbins[1:] - xcenter], axis=0))
+    s_hat_bar_b = sumxw / sumw
+    xerr = abs(np.stack([s_hat_bar_b - S_edges[:-1], S_edges[1:] - s_hat_bar_b], axis=0))
 
-    ax.errorbar(xcenter, mean, xerr=xerr, yerr=err_mean, fmt='.')
+    ax.errorbar(s_hat_bar_b, s_bar_b, xerr=xerr, yerr=s_bar_b_err, fmt='.')
 
-    chiSquare = (xcenter - mean) ** 2  # /(s.max() - s.min())**2
+    chiSquare = (s_hat_bar_b - s_bar_b) ** 2  # /(s.max() - s.min())**2
     chiSquare = chiSquare[~np.isnan(chiSquare)]
     chiSquare = (chiSquare.sum()).item()
 
-    ax.plot([qbins[0], qbins[-1]], [qbins[0], qbins[-1]], color='grey', linestyle='--', label='_nolegend_')
+    ax.plot([S_edges[0], S_edges[-1]], [S_edges[0], S_edges[-1]], color='grey', linestyle='--', label='_nolegend_')
     mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-    ax.set_xlabel(r'$\hat{\overline{s}}\,(x;\theta_1,\theta_0)$')
-    ax.set_ylabel(r'$\overline{s}\,(x,z;\theta_1,\theta_0)$')
+    ax.set_xlabel(r'$\left\langle \hat{s} \right\rangle_b(\theta_1)$')
+    ax.set_ylabel(r'$\left\langle s \right\rangle_b(\theta_1)$')
 
     return chiSquare
 
 
 def compareDistributions(ax: Axes, pred: np.array, true: np.array, **plotParams):
     """
-    Scatter plot of a prediction as a function of the truth.
+    Scatter plot of log r_hat(x; theta_1) against log r(x, z; theta_1).
 
     Args:
         ax: matplotlib axis to plot on
-        pred: prediction of the model aiming to approximate the truth
-        true: truth values the prediction is aiming to approximate
+        pred: log r_hat(x; theta_1) per event
+        true: log r(x, z; theta_1) per event
     """
     if 'fmt' in plotParams.keys():
         plotParams.pop('fmt')
@@ -628,19 +552,19 @@ def compareDistributions(ax: Axes, pred: np.array, true: np.array, **plotParams)
     ax.set_ylim(amin, amax)
     ax.plot([0, 1], [0, 1], color='grey', linestyle="--", transform=ax.transAxes, label='_nolegend_')
     mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-    ax.set_xlabel(r'Learned $\log(\hat{r})$')
-    ax.set_ylabel(r'Calculated $\log(\hat{r})$')
+    ax.set_xlabel(r'Learned $\log\hat{r}(x;\theta_1)$')
+    ax.set_ylabel(r'Calculated $\log r(x,z;\theta_1)$')
 
 
 def hist2d(ax: Axes, pred: np.array, true: np.array, weights: np.array, logbins: bool = False, **plotParams):
     """
-    Weighted 2D histogram of a prediction as a function of the truth.
+    Weighted 2D histogram of log r_hat(x; theta_1) against log r(x, z; theta_1).
 
     Args:
         ax: matplotlib axis to plot on
-        pred: prediction of the model aiming to approximate the truth
-        true: truth values the prediction is aiming to approximate
-        weights: weights used for plotting
+        pred: log r_hat(x; theta_1) per event
+        true: log r(x, z; theta_1) per event
+        weights: weights used for plotting, e.g. w^s(theta_0)
         logbins: bool to use log scale bins
     Returns:
         h: ax.hist2d used for plotting
@@ -659,276 +583,404 @@ def hist2d(ax: Axes, pred: np.array, true: np.array, weights: np.array, logbins:
     ax.set_ylim(amin, amax)
     ax.plot([0, 1], [0, 1], color='grey', linestyle="--", transform=ax.transAxes, label='_nolegend_', linewidth=3)
     mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-    ax.set_xlabel(r'$\log[\hat{r}(x;\theta_1,\theta_0)]$')
-    ax.set_ylabel(r'$\log[r(x,z:\theta_1,\theta_0)]$')
+    ax.set_xlabel(r'$\log\hat{r}(x;\theta_1)$')
+    ax.set_ylabel(r'$\log r(x,z;\theta_1)$')
     return h
 
 
 def f_calibration_curve(
-    ax: Axes, f: np.array, fhat: np.array, f_norm_factor: np.array, nbins: int, threshold: float = 0.01
+    ax: Axes, log_r: np.array, f_hat: np.array, w0_norm: np.array, nbins: int, threshold: float = 0.01
 ):
-    qbins = np.quantile(fhat, np.linspace(threshold, 1 - threshold, nbins + 1))
+    """
+    Calibration of a log-ratio network: the w^s(theta_0)-weighted mean of the true log r(x, z; theta_1) against the
+    mean of f_hat(x) = log r_hat(x; theta_1), in quantile bins of f_hat.
 
-    sumw, _ = np.histogram(fhat, bins=qbins, weights=f_norm_factor)
-    sumwf, _ = np.histogram(fhat, bins=qbins, weights=f_norm_factor * f)
-    sumw2f2, _ = np.histogram(fhat, bins=qbins, weights=f_norm_factor**2 * f**2)
-    sumw2f, _ = np.histogram(fhat, bins=qbins, weights=f_norm_factor**2 * f)
-    sumw2, _ = np.histogram(fhat, bins=qbins, weights=f_norm_factor**2)
-    sumwfhat, _ = np.histogram(fhat, bins=qbins, weights=f_norm_factor * fhat)
+    Args:
+        ax: The matplotlib Axes to plot on.
+        log_r: log r(x, z; theta_1) for each event
+        f_hat: network output f_hat(x) for each event
+        w0_norm: w^s(theta_0) / mean w^s(theta_0) for each event
+        nbins: number of quantile bins
+        threshold: quantile threshold to exclude outliers
+    Returns:
+        sum of the squared bin differences, normalised by the range of log r
+    """
+    f_edges = np.quantile(f_hat, np.linspace(threshold, 1 - threshold, nbins + 1))
 
-    mean = sumwf / sumw
-    err_mean = np.sqrt(sumw2f2 - 2 * sumw2f * mean + sumw2 * mean**2) / sumw
+    sumw, _ = np.histogram(f_hat, bins=f_edges, weights=w0_norm)
+    sumwf, _ = np.histogram(f_hat, bins=f_edges, weights=w0_norm * log_r)
+    sumw2f2, _ = np.histogram(f_hat, bins=f_edges, weights=w0_norm**2 * log_r**2)
+    sumw2f, _ = np.histogram(f_hat, bins=f_edges, weights=w0_norm**2 * log_r)
+    sumw2, _ = np.histogram(f_hat, bins=f_edges, weights=w0_norm**2)
+    sumwfhat, _ = np.histogram(f_hat, bins=f_edges, weights=w0_norm * f_hat)
 
-    xcenter = sumwfhat / sumw
-    xerr = abs(np.stack([xcenter - qbins[:-1], qbins[1:] - xcenter], axis=0))
+    log_r_bar_b = sumwf / sumw
+    log_r_bar_b_err = np.sqrt(sumw2f2 - 2 * sumw2f * log_r_bar_b + sumw2 * log_r_bar_b**2) / sumw
 
-    ax.errorbar(xcenter, mean, xerr=xerr, yerr=err_mean, fmt='.')
+    f_hat_bar_b = sumwfhat / sumw
+    xerr = abs(np.stack([f_hat_bar_b - f_edges[:-1], f_edges[1:] - f_hat_bar_b], axis=0))
 
-    chi_square = (xcenter - mean) ** 2 / (f.max() - f.min()) ** 2
+    ax.errorbar(f_hat_bar_b, log_r_bar_b, xerr=xerr, yerr=log_r_bar_b_err, fmt='.')
+
+    chi_square = (f_hat_bar_b - log_r_bar_b) ** 2 / (log_r.max() - log_r.min()) ** 2
     chi_square = chi_square[~np.isnan(chi_square)]
     chi_square = (chi_square.sum()).item()
 
-    ax.plot([qbins[0], qbins[-1]], [qbins[0], qbins[-1]], color='grey', linestyle='--', label='_nolegend_')
+    ax.plot([f_edges[0], f_edges[-1]], [f_edges[0], f_edges[-1]], color='grey', linestyle='--', label='_nolegend_')
     mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-    ax.set_xlabel(r'$\left\langle\hat{{f}}\,(x;\theta_1,\theta_0)\right\rangle$')
-    ax.set_ylabel(r'$\left\langle{f}\,(x,z;\theta_1,\theta_0)\right\rangle$')
+    ax.set_xlabel(r'$\left\langle\hat{f}_\phi(x)\right\rangle$')
+    ax.set_ylabel(r'$\left\langle\log r(x,z;\theta_1)\right\rangle$')
 
     return chi_square
 
 
-def lr_calibration_curve(
-    ax: Axes, lr: np.array, lrhat: np.array, lr_norm_factor: np.array, nbins: int, threshold: float = 0.01
-):
-    qbins = np.quantile(lrhat, np.linspace(threshold, 1 - threshold, nbins + 1))
+def bin_tick_labels(edges, params=None, value_names=None):
+    """
+    Tick positions and labels for a closure plot drawn with equal-width bins (bin b spans [b, b + 1] on the x axis,
+    whatever its width in the feature).
 
-    sumw, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor)
-    sumwlr, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor * lr)
-    sumw2lr2, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2 * lr**2)
-    sumw2lr, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2 * lr)
-    sumw2, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2)
-    sumwlrhat, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor * lrhat)
-
-    mean = sumwlr / sumw
-    err_mean = np.sqrt(sumw2lr2 - 2 * sumw2lr * mean + sumw2 * mean**2) / sumw
-
-    xcenter = sumwlrhat / sumw
-    xerr = abs(np.stack([xcenter - qbins[:-1], qbins[1:] - xcenter], axis=0))
-
-    ax.errorbar(xcenter, mean, xerr=xerr, yerr=err_mean, fmt='.')
-
-    rel = (xcenter - mean) / mean
-    rel_err = err_mean / mean
-    ok = np.isfinite(rel) & np.isfinite(rel_err)
-    wk = sumw[ok] / sumw[ok].sum()
-    # remove the statistical scatter a perfect model would show
-    rms_bias = np.sqrt(max((wk * rel[ok] ** 2).sum() - (wk * rel_err[ok] ** 2).sum(), 0)).item()
-
-    ax.plot([qbins[0], qbins[-1]], [qbins[0], qbins[-1]], color='grey', linestyle='--', label='_nolegend_')
-    mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-    ax.set_xlabel(r'$\left\langle\hat{{r}}\,(x;\theta_1,\theta_0)\right\rangle$')
-    ax.set_ylabel(r'$\left\langle{r}\,(x,z;\theta_1,\theta_0)\right\rangle$')
-
-    return rms_bias
-
-
-def kinematic_shift_histogram(
-    x0, x1, weights_0, weights_1, params, epoch, lr, outname, ylim=None, epoch_title=True, log=True, scale_ratio=False
-):
-    '''
-    Histogram of learned likelihood ratio agsinst a true distribution as a function of a kinematic variable.
+    Integer features (unit-width fine bins centred on integers in features.yml) get one label per bin: the value,
+    'lo–hi' for a merged bin, and '≥lo' for the last bin, which also counts the values above the range; a feature
+    with named values (value_names, e.g. the era column) gets one name per bin. Any other feature, or R_b in r_hat
+    (params None), gets labels at 6 evenly spread edges, or 7 with a '0' at the zero crossing when the range is
+    symmetric about 0. Labels use 3 significant digits, more while two shown labels would be the same (edges close
+    together, e.g. r_hat near 1).
 
     Args:
-        x: Kinematic to be plotted
-        params: dictionary containing plotting information
-        epoch: epoch number for plot title
-        learned_lr: learned likelihood ratio for each event
-        true_lr: true likelihood ratio for each event
-        outname: name for saving the plot
-    '''
-    if type(x0) == torch.Tensor:
-        x0 = x0.cpu().detach().numpy()
-    if type(x1) == torch.Tensor:
-        x1 = x1.cpu().detach().numpy()
-    if type(weights_0) == torch.Tensor:
-        weights_0 = weights_0.cpu().detach().numpy()
-    if type(weights_1) == torch.Tensor:
-        weights_1 = weights_1.cpu().detach().numpy()
-    learned = hist.Hist(
-        hist.axis.Regular(
-            name='learned', label=params['label'], bins=params['nbins'], start=params['min'], stop=params['max']
-        )
+        edges: bin edges in the feature (after merge_sparse_bins), or in r_hat
+        params: the feature's features.yml entry ('loc', 'min', 'max', 'nbins'); None for edges that are not a
+            feature (R_b)
+        value_names: {column: {value: name}} of features with named values (train.closure_options: the eras)
+    Returns:
+        positions (in bin units) and labels
+    """
+    edges = np.asarray(edges, dtype=np.float64)
+    x = np.arange(len(edges))
+    integer = (
+        params is not None
+        and np.isclose((params['max'] - params['min']) / params['nbins'], 1)
+        and np.allclose((edges - 0.5) % 1, 0)
     )
-    correct = hist.Hist(
-        hist.axis.Regular(
-            name='correct', label=params['label'], bins=params['nbins'], start=params['min'], stop=params['max']
-        )
+    if integer:
+        positions, labels = [], []
+        for b in range(len(edges) - 1):
+            lo, hi = int(round(edges[b] + 0.5)), int(round(edges[b + 1] - 0.5))
+            names = (value_names or {}).get(params['loc'])
+            if names is not None:
+                text = names.get(lo, str(lo))
+            elif b == len(edges) - 2:
+                text = f'≥{lo}'  # values above the range are counted in the last bin
+            else:
+                text = str(lo) if lo == hi else f'{lo}–{hi}'
+            positions.append(b + 0.5)
+            labels.append(text)
+        return positions, labels
+    symmetric = edges[0] < 0 < edges[-1] and abs(edges[0] + edges[-1]) <= 0.05 * (edges[-1] - edges[0])
+    shown = np.unique(np.round(np.linspace(0, len(edges) - 1, min(7 if symmetric else 6, len(edges)))).astype(int))
+    for precision in range(3, 8):
+        tick = [
+            np.format_float_positional(e, precision=precision, unique=False, fractional=False, trim='-') for e in edges
+        ]
+        if len({tick[i] for i in shown}) == len(shown):
+            break
+    positions, labels = list(x[shown].astype(float)), [tick[i] for i in shown]
+    if symmetric and len(shown) == 7:
+        positions[3], labels[3] = float(np.interp(0, edges, x)), '0'
+    return positions, labels
+
+
+def place_legend_and_metrics(ax, samples, rows, fontsize=17, gap=10):
+    """
+    Legend with the metrics to its right, the metrics aligned on their '=' signs and top-aligned with the legend
+    (bottom-aligned for a lower placement). The pair is placed as one block at the upper corners, the top centre and
+    the lower corners in turn, and the placement covering the fewest data samples is kept; placements whose metrics
+    would leave the axes are skipped (all of them only if none fits). The axis ranges are not changed.
+
+    Args:
+        ax: axes holding the labelled artists
+        samples: [N, 2] points in data coordinates that the block should avoid (lines and error bars, densely
+            sampled); non-finite points are ignored
+        rows: (label, value) pairs of the metrics, drawn as 'label = value'
+        fontsize: font size of the legend entries and the metrics
+        gap: space between the legend and the metrics, in pixels
+    Returns:
+        the legend
+    """
+    fig = ax.figure
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    samples = np.asarray(samples, dtype=np.float64)
+    points = ax.transData.transform(samples[np.isfinite(samples).all(1)])
+    axes_box = ax.get_window_extent(renderer)
+
+    def size(text):
+        probe = ax.text(0, 0, text, fontsize=fontsize)
+        box = probe.get_window_extent(renderer)
+        probe.remove()
+        return box.width, box.height
+
+    label_w = max(size(label)[0] for label, _ in rows)
+    value_w = max(size(f' = {value}')[0] for _, value in rows)
+    row_h = max(size(f'{label} = {value}')[1] for label, value in rows) * 1.15
+    block_w, block_h = label_w + value_w, row_h * len(rows)
+    shift = (block_w + gap) / axes_box.width  # axes fraction taken by the metrics and the gap
+
+    def layout(loc):
+        vertical, horizontal = loc.split()
+        anchor_y = 1 if vertical == 'upper' else 0
+        # the legend moves left by the metrics' width wherever the pair would otherwise leave the axes
+        anchor_x = {'left': 0, 'center': 0.5 - shift / 2, 'right': 1 - shift}[horizontal]
+        legend = ax.legend(fontsize=fontsize, loc=loc, bbox_to_anchor=(anchor_x, anchor_y), bbox_transform=ax.transAxes)
+        box = legend.get_window_extent(renderer)
+        x0 = box.x1 + gap
+        y1 = box.y1 if vertical == 'upper' else box.y0 + block_h
+        return legend, box, (x0, y1 - block_h, x0 + block_w, y1)
+
+    def covered(x0, y0, x1, y1):
+        return int(((points[:, 0] >= x0) & (points[:, 0] <= x1) & (points[:, 1] >= y0) & (points[:, 1] <= y1)).sum())
+
+    scores, fits = {}, {}
+    for loc in ['upper right', 'upper left', 'upper center', 'lower right', 'lower left']:
+        legend, box, block = layout(loc)
+        legend.remove()
+        fits[loc] = block[2] <= axes_box.x1
+        scores[loc] = covered(box.x0, box.y0, box.x1, box.y1) + covered(*block)
+    candidates = [loc for loc in scores if fits[loc]] or list(scores)
+    legend, _, (x0, y0, x1, y1) = layout(min(candidates, key=scores.get))
+    to_axes = ax.transAxes.inverted()
+    for i, (label, value) in enumerate(rows):
+        x_eq, y = to_axes.transform((x0 + label_w, y1 - (i + 0.5) * row_h))
+        ax.text(x_eq, y, label, transform=ax.transAxes, ha='right', va='center_baseline', fontsize=fontsize)
+        ax.text(x_eq, y, f' = {value}', transform=ax.transAxes, ha='left', va='center_baseline', fontsize=fontsize)
+    return legend
+
+
+def closure_plot(closure, params, outname, hypothesis, lumi=None, epoch=None, ylims=None, value_names=None, title=None):
+    """
+    Closure of one binned test of closure_metrics, drawn on equal-width bins labelled by their edges (bin_tick_labels).
+
+    Top: the target yield w_b (black) and the reweighted reference yield w_hat_b (blue) per bin, each with its own MC
+    error sqrt(sum w_i^2); log scale when the yields span more than a factor 50. Bottom: the relative misclosure
+    Delta_b / w_b (filled) and the uncorrected residual with r_hat = 1 (hollow) inside the band +-sqrt(Cov_bb) / w_b of
+    the matched covariance (events in both samples counted once). The bottom range is set by the filled points;
+    points beyond 0.9 of it are drawn as arrows at its edge. Bins with w_b = 0 are hatched. The legend carries
+    chi^2/ndf, Delta_rms and Z of the test.
+
+    With epoch (or title) the plot is an animation frame titled by the epoch (or the title) instead of the CMS label,
+    and ylims fixes both y ranges, so the axes and the marker / arrow choice do not change between frames. No tick
+    label sits on the boundary between the panels: major ticks in the lowest 4% of the top panel and the highest 4%
+    of the bottom panel are dropped (in axis coordinates, so log panels are covered too).
+
+    Args:
+        closure: one closure_metrics details entry ('result', 'nominal_result', 'summary', 'edges'), e.g.
+            details['features'][name]
+        params: the feature's features.yml entry ('label', optional 'unit', and 'loc', 'min', 'max', 'nbins' for the
+            tick labels); for R_b, a dictionary with 'label' only (r_closure_plot)
+        outname: file to write
+        hypothesis: TeX of the hypothesis in the labels, e.g. r'\\theta,\\nu' or r'\\theta'
+        lumi: integrated luminosity in fb^-1 for the CMS label (final plots only)
+        epoch: epoch of an animation frame, None for a final plot
+        ylims: ((top_low, top_high), (-span, span)) from the first frame; None to choose them
+        value_names: {column: {value: name}} of features with named values, for the tick labels (bin_tick_labels)
+        title: title of an animation frame, replacing 'Epoch NNNN' (e.g. the best network)
+    Returns:
+        the y ranges used, for the next frames
+    """
+    result, baseline, summary = closure['result'], closure['nominal_result'], closure['summary']
+    edges = closure['edges']
+    x = np.arange(len(edges))
+    centers = x[:-1] + 0.5
+    w, w_hat = result['w'], result['w_hat']
+    w_err, w_hat_err = np.sqrt(result['w_var']), np.sqrt(result['w_hat_var'])
+    empty = w <= 0
+
+    def relative(values):
+        return np.divide(values, w, where=~empty, out=np.full(len(w), np.nan))
+
+    rel, rel0 = relative(result['delta']), relative(baseline['delta'])
+    band = relative(np.sqrt(np.diag(result['cov'])))
+
+    mh.style.use('CMS')
+    fig, (top, bottom) = plt.subplots(
+        2, 1, sharex=True, figsize=(10, 9), gridspec_kw={'height_ratios': [2, 1], 'hspace': 0}
     )
+    top.stairs(w, x, color='k', linewidth=2, label=rf'$w_b({hypothesis})$')
+    top.stairs(w_hat, x, color=ENSEMBLE_COLOR, linewidth=2, label=rf'$\hat{{w}}_b({hypothesis})$')
+    top.errorbar(centers, w, yerr=w_err, fmt='none', color='k', linewidth=2)
+    top.errorbar(centers, w_hat, yerr=w_hat_err, fmt='none', color=ENSEMBLE_COLOR, linewidth=2)
+    positive = w[w > 0]
+    if positive.size and positive.max() / positive.min() > 50:
+        top.set_yscale('log')
+    top.set_ylabel('Expected events / bin')
 
-    nominal = hist.Hist(
-        hist.axis.Regular(
-            name='nominal', label=params['label'], bins=params['nbins'], start=params['min'], stop=params['max']
-        )
-    )
-
-    weights_0 = weights_0.flatten()
-    weights_1 = weights_1.flatten()
-    lr = lr.flatten()
-
-    nominal.fill(x0, weight=weights_0)
-    learned.fill(x0, weight=lr * weights_0)
-    correct.fill(x1, weight=weights_1)
-
-    mh.style.use("CMS")
-    ax = []
-    fig = plt.figure()
-    grid = fig.add_gridspec(2, 1, hspace=0.1, height_ratios=[5, 1])
-    ax += [fig.add_subplot(grid[0])]
-    ax += [fig.add_subplot(grid[1], sharex=ax[0])]
-    if epoch_title:
-        fig.suptitle(f'Epoch {epoch:04d}')
+    if ylims is None:
+        # range set by the corrected residuals (filled points); uncorrected points beyond it become arrows
+        largest = np.nanmax(np.abs(rel), initial=0)
+        span = 1.25 * (largest if largest > 0 else np.nanmax(band, initial=0) or 1e-3)
     else:
-        mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax[0])
+        span = ylims[1][1]
+    bottom.stairs(band, x, baseline=-band, fill=True, color='#d9d9d9')
+    for values, face in ((rel0, 'none'), (rel, 'k')):
+        # arrows for points beyond the panel's fixed range (not the current frame's largest residual), so a point
+        # drawn as a marker stays one in every animation frame
+        inside = np.abs(values) <= 0.9 * span
+        outside = ~inside & np.isfinite(values)
+        bottom.plot(centers[inside], values[inside], 'o', mfc=face, color='k', markersize=7)
+        for c, v in zip(centers[outside], values[outside]):
+            bottom.plot(c, np.sign(v) * span * 0.94, '^' if v > 0 else 'v', mfc=face, color='k', markersize=9)
+    bottom.axhline(0, color='k', linestyle='--', linewidth=1)
+    for b in np.flatnonzero(empty):
+        for ax in (top, bottom):
+            ax.axvspan(x[b], x[b + 1], facecolor='none', edgecolor='#9a9a9a', hatch='//', linewidth=0)
+    bottom.set_ylabel(r'$\Delta_b / w_b$')
+    unit = params.get('unit')
+    bottom.set_xlabel(params['label'] + (f' [{unit}]' if unit else ''))
+    positions, labels = bin_tick_labels(edges, params if 'loc' in params else None, value_names)
+    bottom.set_xticks(positions, labels)
+    bottom.set_xticks(x, minor=True)
+    bottom.set_xlim(x[0], x[-1])
 
-    n_learned, bins = learned.to_numpy()
-    n_correct, _ = correct.to_numpy()
+    if ylims is None:
+        low, high = top.get_ylim()
+        if top.get_yscale() == 'log':
+            # room above the distribution for the legend and the metrics
+            high = high * (high / low) ** 0.05
+        else:
+            # linear: the range follows the data (stairs would otherwise pull it down to 0), with room on top
+            ends = np.concatenate([w - w_err, w_hat - w_hat_err, w + w_err, w_hat + w_hat_err])
+            data_low, data_high = np.nanmin(ends), np.nanmax(ends)
+            pad = data_high - data_low
+            low, high = data_low - 0.05 * pad, data_high + 0.3 * pad
+        ylims = ((low, high), (-span, span))
+    top.set_ylim(ylims[0])
+    bottom.set_ylim(ylims[1])
 
-    lErr = []
-    cErr = []
-    for i in range(params['nbins']):
-        lErr.append((lr[(x0 > bins[i]) & (x0 < bins[i + 1])] ** 2).sum())
-        cErr.append(np.array((x1 > bins[i]) & (x1 < bins[i + 1])).sum())
-    lErr = np.sqrt(lErr)
-    cErr = np.sqrt(cErr)
+    def clear_of_boundary(ax, t, low_edge):
+        # position of tick t in axis coordinates; the panels meet at the top panel's low edge
+        lo, hi = ax.get_ylim()
+        scale = np.log10 if ax.get_yscale() == 'log' else float
+        u = (scale(t) - scale(lo)) / (scale(hi) - scale(lo))
+        return 0 <= u <= 1 and (u > 0.04 if low_edge else u < 0.96)
 
-    nominal.plot1d(ax=ax[0], linestyle='dashed', color='k', label=r'$r\,(x,z;\theta,0)$')
-    correct.plot1d(
-        ax=ax[0],
-        yerr=cErr,
-        color='C0',
-        label=r'$r\,(x,z;\theta,\nu)$',
-    )
-    learned.plot1d(
-        ax=ax[0],
-        yerr=lErr,
-        linestyle='dashdot',
-        color='C1',
-        label=r'$\hat{r}\,(x;\theta,\nu)$',
-    )
+    for ax, low_edge in ((top, True), (bottom, False)):
+        ax.set_yticks([t for t in ax.get_yticks() if clear_of_boundary(ax, t, low_edge)])
 
-    ratio = np.divide(n_learned, n_correct, where=((n_correct > 0) & (n_learned > 0)), out=np.zeros(n_learned.shape))
-    rErr = ratio * np.sqrt(
-        np.divide(lErr, n_learned, where=((n_correct > 0) & (n_learned > 0)), out=np.zeros(lErr.shape)) ** 2
-        + np.divide(cErr, n_correct, where=((n_correct > 0) & (n_learned > 0)), out=np.zeros(n_correct.shape)) ** 2
-    )
-
-    ax[1].plot((bins[:-1] + bins[1:]) / 2, ratio, '.k')
-    ax[1].errorbar((bins[:-1] + bins[1:]) / 2, ratio, yerr=rErr, fmt='none', color='k')
-    ax[1].hlines(1, bins[0], bins[-1], color='k', linestyle='dashed', alpha=0.5)
-
-    if scale_ratio:
-        bin_mask = n_correct >= 1
-        err_max = np.array([((ratio + rErr - 1)[bin_mask]).max(), ((1 - ratio + rErr)[bin_mask]).max()]).max() * 1.05
-        ax[1].set_ylim([1 - err_max, 1 + err_max])
-    else:
-        ax[1].set_ylim(0, 2)
-    ax[0].set_xlabel('')
-    ax[0].set_xlim(bins[0], bins[-1])
-    plt.setp(ax[0].get_xticklabels(), visible=False)
-    ax[1].set_xlabel(params['label'])
-    ax[1].set_ylabel(r'$\frac{\hat{r}(x;\theta,\nu)}{r(x,z;\theta,\nu)}$')
-    ax[0].set_ylabel('Number of Events')
-    ax[0].legend()
-    if log:
-        ax[0].set_yscale('log')
-    if ylim is None:
-        ylim = ax[0].get_ylim()
+    mathtext_log = logging.getLogger('matplotlib.mathtext')
+    mathtext_log.addFilter(_no_tex_mapping)
+    try:
+        if title is not None:
+            top.set_title(title, fontsize=22)
+        elif epoch is None:
+            # the yields are expected events at the luminosity of the eras in the sample
+            mh.cms.label('Preliminary', data=False, lumi=lumi, com=13, ax=top)
+        else:
+            top.set_title(f'Epoch {epoch:04d}', fontsize=22)
+        # the legend block avoids the stairs (sampled along each bin) and the error bars
+        sampled = [np.c_[np.linspace(x[b], x[b + 1], 20), np.full(20, v[b])] for v in (w, w_hat) for b in range(len(v))]
+        sampled += [
+            np.c_[np.full(20, c), np.linspace(v - e, v + e, 20)]
+            for values, errors in ((w, w_err), (w_hat, w_hat_err))
+            for c, v, e in zip(centers, values, errors)
+        ]
+        rows = [
+            (r'$\chi^2/\mathrm{ndf}$', f'{summary["chi2"]:.1f} / {summary["ndf"]}'),
+            (r'$\Delta_{\mathrm{rms}}$', f'{100 * summary["rms_bias"]:.2f}%'),
+            (r'$Z$', f'{summary["z"]:.1f}'),
+        ]
+        place_legend_and_metrics(top, np.concatenate(sampled), rows)
         fig.savefig(outname, bbox_inches='tight')
-        plt.close(fig)
-        return ylim
-    else:
-        ax[0].set_ylim(ylim)
-        fig.savefig(outname, bbox_inches='tight')
-        plt.close(fig)
+    finally:
+        mathtext_log.removeFilter(_no_tex_mapping)
+    plt.close(fig)
+    return ylims
 
 
-def lr_calibration_difference(
-    ax: Axes,
-    lr: np.array,
-    lrhat: np.array,
-    lr_norm_factor: np.array,
-    nbins: int,
-    threshold: float = 0.01,
-    include_stdv: bool = False,
-):
-    qbins = np.quantile(lrhat, np.linspace(threshold, 1 - threshold, nbins + 1))
+def r_closure_plot(calibration, label, hypothesis=r'\theta,\nu', lumi=None):
+    """
+    Closure in the quantile bins R_b of f_hat (details['r'] of closure_metrics), for every training type, in the
+    layout of the per-feature closure plots (closure_plot): w_b and w_hat_b per bin R_b, and Delta_b / w_b inside the
+    matched band, with chi^2/ndf, Delta_rms and Z of the test. The bins are labelled by their edges in
+    r_hat = exp(f_hat), so the ticks are values of r_hat itself, not bin means. Writes <label>/r_closure.png.
 
-    sumw, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor)
-    sumwlr, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor * lr)
-    sumw2, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2)
-    sumwlrhat, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor * lrhat)
-    sumwlrdiff, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor * (lr - lrhat))
-    sumwlrdiff2, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor * (lr - lrhat) ** 2)
-    sumw2lrdiff, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2 * (lr - lrhat))
-    sumw2lrdiff2, _ = np.histogram(lrhat, bins=qbins, weights=lr_norm_factor**2 * (lr - lrhat) ** 2)
+    Args:
+        calibration: details['r'] of closure_metrics ('result', 'nominal_result', 'summary', 'edges' in f_hat)
+        label: output directory
+        hypothesis: hypothesis in the labels (theta for eft, theta, nu for nuisances)
+        lumi: integrated luminosity in fb^-1 for the CMS label
+    """
+    shown = dict(calibration, edges=np.exp(calibration['edges']))
+    params = {'label': rf'$\hat{{r}}(x;{hypothesis})$'}
+    closure_plot(shown, params, f'{label}/r_closure.png', hypothesis, lumi=lumi)
 
-    meanlr = sumwlr / sumw
-    meanlrhat = sumwlrhat / sumw
-    meanlrdiff = sumwlrdiff / sumw
 
-    mean_err = np.sqrt(sumw2lrdiff2 + sumw2 * meanlrdiff**2 - 2 * meanlrdiff * sumw2lrdiff) / sumw
-    err_width = 2 * mean_err
-    err_down = (meanlr - meanlrhat) - mean_err
+def r_spread_plot(r, f_hat, w0, edges, hypothesis, outname):
+    """
+    Spread of the per-event true ratio r(x, z) around the learned r_hat(x) = exp(f_hat) in the bins R_b of the
+    closure test (details['r']['edges'] of closure_metrics, in f_hat), drawn on equal-width bins labelled by their
+    edges in r_hat, as r_closure.png. Paired data only (r = w1 / w0 per event).
 
-    mean_stdv = np.sqrt(np.maximum(sumwlrdiff2 / sumw - meanlrdiff**2, 0))
-    stdv_width = 2 * mean_stdv
-    stdv_down = (meanlr - meanlrhat) - mean_stdv
+    Relative to <r>_b (means weighted by w0): the mean difference (<r>_b - <r_hat>_b) / <r>_b (black, the misclosure
+    of r_closure.png with the opposite sign) with its uncertainty sqrt(Var(<r>_b - <r_hat>_b)) / <r>_b (blue), and the
+    per-event spread sqrt(Var(r - r_hat))_b / <r>_b (light band): the part of the true ratio that depends on the
+    latent z and cannot be learned from x, which no closure plot shows.
+    Args:
+        r: true ratio per event
+        f_hat: learned log ratio per event
+        w0: reference weight per event (any normalisation)
+        edges: bin edges R_b in f_hat
+        hypothesis: hypothesis in the labels (theta for eft, theta, nu for weight_shift)
+        outname: file to write
+    """
+    n = len(edges) - 1
+    b = np.clip(np.searchsorted(edges, f_hat, side='right') - 1, 0, n - 1)
+    w0 = np.asarray(w0, dtype=np.float64)
+    d = r - np.exp(f_hat)
 
-    differ = meanlr - meanlrhat
+    def sums(values):
+        return np.bincount(b, weights=values, minlength=n)
 
-    mean_error_formatting = {
-        'align': 'edge',
-        'facecolor': "#4086B8",
-        'linewidth': 0,
-        'label': r'$\sigma_{\langle r  -\hat{r}\rangle}$',
-        'alpha': 0.6,
-    }
+    with np.errstate(invalid='ignore', divide='ignore'):
+        sumw = sums(w0)
+        r_b = sums(w0 * r) / sumw
+        d_b = sums(w0 * d) / sumw
+        d_err = np.sqrt(sums(w0**2 * (d - d_b[b]) ** 2)) / sumw
+        spread = np.sqrt(np.maximum(sums(w0 * d**2) / sumw - d_b**2, 0))
+        mean, err, width = d_b / r_b, d_err / r_b, spread / r_b
 
-    mean_stdv_formatting = {
-        'align': 'edge',
-        'facecolor': "#D5E3D5",
-        'linewidth': 0,
-        'label': r'$\sigma_{ r  -\hat{r}}$',
-        'alpha': 0.6,
-    }
-
-    ax.hist(qbins[:-1], weights=differ, bins=qbins, histtype='step', color='k', label=r'$r - \hat{r}$')
-
-    if include_stdv:
-        ax.bar(qbins[:-1], stdv_width, bottom=stdv_down, width=(qbins[1:] - qbins[:-1]), **mean_stdv_formatting)
-    ax.plot([qbins[0], qbins[-1]], [0, 0], color='grey', linestyle=':', label='_nolegend_')
-    ax.bar(qbins[:-1], err_width, bottom=err_down, width=(qbins[1:] - qbins[:-1]), **mean_error_formatting)
-
-    pulls = np.abs(differ) / mean_err
-    pulls = pulls[np.isfinite(pulls)]
-    n = len(pulls)
-    # for a perfectly calibrated model the pulls are standard normal: E|Z| = sqrt(2/pi), Var|Z| = 1 - 2/pi
-    pull = (pulls.mean() - np.sqrt(2 / np.pi)).item()
-    pull_err = np.sqrt((1 - 2 / np.pi) / n).item()
-    expected = [0.6827, 0.9545, 0.9973]
-    ci_diff = [(e - (pulls < s).mean()).item() for s, e in zip(range(1, 4), expected)]
-    # binomial scatter of the fraction of bins inside each interval
-    ci_diff_err = [np.sqrt(e * (1 - e) / n).item() for e in expected]
-
-    mh.cms.label("Preliminary", data=False, lumi=None, com=13, ax=ax)
-    ax.set_xlabel(r'$\left\langle\hat{r}\,(x;\theta_1,\theta_0)\right\rangle$')
-    ax.set_ylabel(
-        r'$\left\langle{r}\,(x,z;\theta_1,\theta_0)\right\rangle - \left\langle\hat{{r}}\,(x;\theta_1,\theta_0)\right\rangle$'
+    mh.style.use('CMS')
+    fig, ax = plt.subplots()
+    x = np.arange(n + 1)
+    ax.stairs(
+        mean + width, x, baseline=mean - width, fill=True, color='#D5E3D5', label=r'$\sqrt{\mathrm{Var}(r-\hat{r})}$'
     )
-    y_max = abs(np.array(ax.get_ylim())).max() * 1.2
-    ax.set_ylim([-y_max, y_max])
-    ax.set_xlim([qbins[0], qbins[-1]])
-
-    return pull, pull_err, ci_diff, ci_diff_err
+    ax.stairs(
+        mean + err,
+        x,
+        baseline=mean - err,
+        fill=True,
+        color='#4086B8',
+        alpha=0.6,
+        label=r'$\sqrt{\mathrm{Var}(\left\langle r \right\rangle_b-\left\langle \hat{r} \right\rangle_b)}$',
+    )
+    ax.stairs(mean, x, color='k', label=r'$\left\langle r \right\rangle_b - \left\langle \hat{r} \right\rangle_b$')
+    ax.axhline(0, color='grey', linestyle=':')
+    positions, labels = bin_tick_labels(np.exp(edges))
+    ax.set_xticks(positions, labels)
+    ax.set_xticks(x, minor=True)
+    ax.set_xlim(x[0], x[-1])
+    extent = np.nanmax(np.abs(np.concatenate([mean + width, mean - width])), initial=0)
+    ax.set_ylim(-1.3 * extent or -1, 1.3 * extent or 1)
+    ax.set_xlabel(rf'$\hat{{r}}(x;{hypothesis})$')
+    ax.set_ylabel(r'$(r - \hat{r}) / \left\langle r \right\rangle_b$')
+    mathtext_log = logging.getLogger('matplotlib.mathtext')
+    mathtext_log.addFilter(_no_tex_mapping)
+    try:
+        ax.legend(loc='upper left', fontsize=16)
+        mh.cms.label('Preliminary', data=False, lumi=None, com=13, ax=ax)
+        fig.savefig(outname, bbox_inches='tight')
+    finally:
+        mathtext_log.removeFilter(_no_tex_mapping)
+    plt.close(fig)
 
 
 # reference categorical palette (fixed order), slot 1 for the ensemble, the rest for outlier seeds
@@ -1010,7 +1062,7 @@ NOTE_COLORS = {'dropped': '#a51d1d', 'retrain': '#d95926'}
 
 
 def wc_tex(wc):
-    '''TeX of a WC name, the convention of likelihood_scan_dev.ipynb: cQj31 -> c_{Qj}^{31}, ctGRe -> \Re[c_{tG}].'''
+    r'''TeX of a WC name, the convention of likelihood_scan_dev.ipynb: cQj31 -> c_{Qj}^{31}, ctGRe -> \Re[c_{tG}].'''
     m = re.fullmatch(r'c([A-Za-z]+?)(Re|Im)', wc)
     if m:
         return rf'\{m.group(2)}\left[c_{{{m.group(1)}}}\right]'
@@ -1172,10 +1224,11 @@ def _place_legend(ax, samples, note, fontsize=20):
 
 def plot_closure(k, f, sums, bias, binning, labels, outname, feature_config=None):
     '''
-    Closure of one gamma component in one feature: the learned sum w0 * gamma_k against its truth per bin (top), and
-    their difference relative to the SM yield with the noise band sqrt(E^2 + s^2) of the bias test (bottom). Error bars
-    show the MC statistics of each sum (and the seed spread for the learned one), both at the bin centre. Bins are
-    drawn with equal widths and labelled by their edges; bins without events of the component are hatched.
+    Closure of one gamma component q in one feature: the learned sum hat w_q,b = sum_i w^s_i(theta_0) gamma_hat_q,i
+    against its truth w_q,b per bin K_b (top), and their difference Delta relative to the SM yield lambda_K_b(theta_SM)
+    with the noise band sqrt(Var_MC + Var_seeds) of the bias test (bottom). Error bars show the MC statistics of each
+    sum (and the seed spread for the learned one), both at the bin centre. Bins are drawn with equal widths and
+    labelled by their edges; bins without events of the component are hatched.
 
     Args:
         k: component index
@@ -1200,7 +1253,7 @@ def plot_closure(k, f, sums, bias, binning, labels, outname, feature_config=None
         2, 1, sharex=True, figsize=(10, 9), gridspec_kw={'height_ratios': [2, 1], 'hspace': 0}
     )
     top.stairs(truth, x, color='k', linewidth=2, label='truth')
-    top.stairs(truth + D, x, color=ENSEMBLE_COLOR, linewidth=2, label=r'$\sum w_0\,\hat{\gamma}$')
+    top.stairs(truth + D, x, color=ENSEMBLE_COLOR, linewidth=2, label=r'$\sum_i w^s_i(\theta_0)\,\hat{\gamma}_{q,i}$')
     # MC statistics of each sum; the learned one also carries the seed spread of the ensemble mean
     truth_err = np.sqrt(sums['truth_var'][k, b])
     learned_err = np.sqrt(sums['learned_var'][k, b] + bias['s2'][k, b])
@@ -1220,15 +1273,22 @@ def plot_closure(k, f, sums, bias, binning, labels, outname, feature_config=None
         top.set_ylabel(f'Events per unit {component_tex(labels[k])}')
     band = np.where(empty, np.nan, noise / sm)
     bottom.stairs(
-        band, x, baseline=-band, fill=True, color='#d9d9d9', label=r'$\pm\sqrt{E^2 + s^2} / \lambda(\mathrm{sm})$'
+        band,
+        x,
+        baseline=-band,
+        fill=True,
+        color='#d9d9d9',
+        label=r'$\pm\sqrt{\mathrm{Var}_{\mathrm{MC}} + \mathrm{Var}_{\mathrm{seeds}}} / \lambda_{K_b}(\theta_{\mathrm{SM}})$',
     )
-    bottom.plot(centers[~empty], (D / sm)[~empty], 'o', color='k', label=r'$\Delta / \lambda(\mathrm{sm})$')
+    bottom.plot(
+        centers[~empty], (D / sm)[~empty], 'o', color='k', label=r'$\Delta / \lambda_{K_b}(\theta_{\mathrm{SM}})$'
+    )
     bottom.axhline(0, color='k', linestyle='--', linewidth=1)
     # bins without events of the component: hatched in both panels
     for i in np.flatnonzero(empty):
         for ax in (top, bottom):
             ax.axvspan(x[i], x[i + 1], facecolor='none', edgecolor='#9a9a9a', hatch='//', linewidth=0)
-    bottom.set_ylabel(r'$\Delta / \lambda(\mathrm{sm})$')
+    bottom.set_ylabel(r'$\Delta / \lambda_{K_b}(\theta_{\mathrm{SM}})$')
     name = binning['names'][f]
     # as on the x axis of the training's kinematic plots: label [unit]
     if feature_config:
@@ -1539,12 +1599,14 @@ def plot_point_search(history, chosen, wcs, outname, scan=False):
     pad = 0.1 * span if span > 0 else 0.05
     ax.set_ylim(relative.min() - pad, relative.max() + pad)
     ax.tick_params(axis='x', which='minor', length=0)
-    # with the flagged weights the relative objective is the weighted mean of each component's squared error
+    # with the flagged weights the relative objective is the g_q-weighted mean of each component's variance
     # relative to the current design; with the scan-region weights it is a trace over the scan region
     if scan:
         ax.set_ylabel('scan-region expected error, relative to the current design')
     else:
-        ax.set_ylabel(r'$\left\langle (\sigma_k / \sigma_k^{\mathrm{current}})^2 \right\rangle_w$')
+        ax.set_ylabel(
+            r'$\left\langle \mathrm{Var}(\hat{\gamma}_q) / \mathrm{Var}_{\mathrm{current}}(\hat{\gamma}_q) \right\rangle_g$'
+        )
     ax.set_xlabel('point added')
     mathtext_log = logging.getLogger('matplotlib.mathtext')
     mathtext_log.addFilter(_no_tex_mapping)
@@ -1556,15 +1618,17 @@ def plot_point_search(history, chosen, wcs, outname, scan=False):
     plt.close(fig)
 
 
-def plot_search_sigma(sigma0, sigma1, rms_bias, labels, outname, components=None):
+def plot_search_uncertainty(sigma0, sigma1, rms_bias, labels, outname, components=None):
     '''
-    Expected error of the components (independent network errors) with the current design (black) and with the points
-    the point search proposes (green), joined by a thin line, over the measured rms bias (grey bars), log scale.
+    Expected uncertainty sqrt(Var(gamma_hat_q)) of the components (independent network errors) with the current design
+    (black) and with the points the point search proposes (green), joined by a thin line, over the measured rms bias
+    (grey bars), log scale.
     Components the design cannot determine (NaN) are marked on the upper edge, components with rms bias 0 (noise
     exceeds the bias) on the lower edge.
 
     Args:
-        sigma0, sigma1: [K] propagated errors before and after the search, NaN for unconstrained components
+        sigma0, sigma1: [K] propagated sqrt(Var(gamma_hat_q)) before and after the search, NaN for unconstrained
+            components
         rms_bias: [K, F] output of component_bias
         labels: [K] component names (component_labels)
         outname: file to save the plot to
@@ -1614,7 +1678,7 @@ def plot_search_sigma(sigma0, sigma1, rms_bias, labels, outname, components=None
             ax.scatter(x[free], np.full(free.sum(), high), marker='v', s=120, color=color, clip_on=False, zorder=5)
     ax.set_yscale('log')
     ax.set_ylim(low, high)
-    ax.set_ylabel(r'$\sigma_k / \lambda(\mathrm{sm})$')
+    ax.set_ylabel(r'$\sqrt{\mathrm{Var}(\hat{\gamma}_q)} / \lambda_{K_b}(\theta_{\mathrm{SM}})$')
     ax.legend(fontsize=16)
     ax.set_xticks(x, [component_tex(labels[k]) for k in order], rotation=90, fontsize=16)
     ax.set_xlim(-0.5, len(order) - 0.5)
@@ -1638,24 +1702,26 @@ POINT_KINDS = {
 
 def plot_network_misclosure(misclosure, yield_ratio, network_tex, outname, notes=None, n_labels=3, per_seed=None):
     '''
-    Misclosure m_n of every training network against the size of its training point (inclusive yield relative to the
-    SM, lambda(theta_1) / lambda_SM, linear) on a log scale, by kind of point; suspects ringed in their attribution colours and the
-    n_labels largest m_n labelled with their training point in a column on the right, joined by leader lines. The
-    kind of point is shown by marker shape in neutral grey; suspects are filled in their status colour. With per_seed, every seed's m_n is drawn as a small
-    marker, joined by a thin line from the smallest to the largest, with the seed average as the large marker.
+    Misclosure m_a of every training network a (a fraction of lambda_K_b(theta_SM), network_misclosure) against the
+    size of its training point (inclusive yield relative to the SM, lambda(theta_1) / lambda(theta_SM), linear) on a
+    log scale, by kind of point; suspects ringed in their
+    attribution colours and the n_labels largest m_a labelled with their training point in a column on the right,
+    joined by leader lines. The kind of point is shown by marker shape in neutral grey; suspects are filled in their
+    status colour. With per_seed, every seed's m_a is drawn as a small marker, joined by a thin line from the smallest
+    to the largest, with the seed average as the large marker.
 
     Args:
-        misclosure: {network name: m_n} averaged over seeds (network_misclosure)
-        yield_ratio: {network name: lambda(theta_1) / lambda_SM}
+        misclosure: {network name: m_a} averaged over seeds (network_misclosure)
+        yield_ratio: {network name: lambda(theta_1) / lambda(theta_SM)}
         network_tex: {network name: TeX label of its training point}
         outname: file to save the plot to
         notes: {network name: 'dropped' or 'retrain'}
-        n_labels: networks labelled, largest m_n first
-        per_seed: {network name: [m_n of every seed]} (network_misclosure with per_seed=True), optional
+        n_labels: networks labelled, largest m_a first
+        per_seed: {network name: [m_a of every seed]} (network_misclosure with per_seed=True), optional
     '''
     notes = notes or {}
     names = [n for n in misclosure if n in yield_ratio]
-    kind = {n: 'sm' if n == 'sm' else 'cross' if n.startswith('cross_terms/') else 'scan' for n in names}
+    kind = {n: 'sm' if n == 'sm' else 'cross' if is_cross_term(n) else 'scan' for n in names}
     m = np.array([misclosure[n] for n in names])
     x = np.array([yield_ratio[n] for n in names])
     shown = np.concatenate([m] + ([np.concatenate([per_seed[n] for n in names])] if per_seed else []))
@@ -1719,7 +1785,7 @@ def plot_network_misclosure(misclosure, yield_ratio, network_tex, outname, notes
     for status, c in NOTE_COLORS.items():
         if status in notes.values():
             ax.scatter([], [], marker='s', s=80, color=c, label=status)
-    # labels stacked in a column at the top right, largest m_n first, each joined to its marker by a leader line
+    # labels stacked in a column at the top right, largest m_a first, each joined to its marker by a leader line
     for row, i in enumerate(np.argsort(-m)[:n_labels]):
         ax.annotate(
             network_tex[names[i]],
@@ -1734,8 +1800,8 @@ def plot_network_misclosure(misclosure, yield_ratio, network_tex, outname, notes
     # the yield ratios span only about 1-1.2 (training points sized by their yield change), so x stays linear
     ax.set_yscale('log')
     ax.set_ylim(low, high)
-    ax.set_xlabel(r'$\lambda(\theta_1) / \lambda(\mathrm{sm})$')
-    ax.set_ylabel(r'$m_n$ / $\lambda(\mathrm{sm})$')
+    ax.set_xlabel(r'$\lambda(\theta_1) / \lambda(\theta_{\mathrm{SM}})$')
+    ax.set_ylabel(r'$m_a$')
     ax.legend(fontsize=16, loc='upper left')
     mathtext_log = logging.getLogger('matplotlib.mathtext')
     mathtext_log.addFilter(_no_tex_mapping)
