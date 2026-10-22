@@ -1,0 +1,38 @@
+# weight_shift training: one network for the nuisance systematic ISR, direction up (weight-systematic ratio stored in the nominal sample (syst_ratio)); keys are described in
+# README.md, the data in docs/data.md
+
+# data: the root of a combined sample (nominal/ and the variation directories; holdout: validation.p)
+method: weight_shift
+data: /groups/klannon/cmcgrad2/data/reco_systematics_v3/SR_CHANNELS_2j3j_gen
+lumi: [19.52, 16.81, 41.48, 59.83]  # fb^-1 per era
+eras: [2016APV, '2016', '2017', '2018']  # era names for the plots, indexed like lumi
+
+# training point: the systematic and its direction
+systematic: ISR
+direction: up
+
+# network: log-ratio output (no activation)
+network:
+  - {type: Linear, out: 128, activation: LeakyReLU}
+  - {type: Linear, in: 128, out: 128, activation: LeakyReLU}
+  - {type: Linear, in: 128, out: 1, activation: None}
+
+# optimisation
+seed: 0
+batchSize: 2000
+learningRate: 0.005
+scheduler: plateau
+factor: 0.1
+lr_patience: 10
+patience: 30
+epochs: 200
+device: cpu
+threads: 1
+
+# plots
+features: /groups/klannon/cmcgrad2/data/reco_systematics_v3/features.yml
+features_to_animate: [dbjmass, dbjpt, dldbjmass, dldeta, dldphi, dlmass, dlpt, ljopt]
+animate_per_epoch: 5
+
+# output
+name: /groups/klannon/cmcgrad2/results/examples/weight_shift_ISR_up

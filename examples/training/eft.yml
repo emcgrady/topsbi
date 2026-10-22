@@ -1,89 +1,39 @@
-animate_per_epoch: 5
-batchSize: 10000
-c0:
-- 1.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-c1:
-- 1.0
-- 0.0
-- 0.0
-- 0.0
-- 0.1
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-- 0.0
-data: /groups/klannon/cmcgrad2/data/reco_systematics_v3/SR_CHANNELS_2j3j_gen/nominal
-holdout: /groups/klannon/cmcgrad2/data/reco_systematics_v3/SR_CHANNELS_2j3j_gen/nominal/validation.p
-device: cpu
-epochs: 1000
-learningRate: 0.005
-scheduler: plateau   # 'plateau' (default) | 'cosine' | 'none'
-factor: 0.1          # plateau: multiplicative LR decay factor
-lr_patience: 5       # plateau: epochs without improvement before LR step
-features: /groups/klannon/cmcgrad2/data/reco_systematics_v3/features.yml
-features_to_animate:
-- dldbjmass
-- dlmass
-- dlpt
-lumi:                # UL16APV, UL16, UL17, UL18, indexed by the year_int feature
-- 19.52
-- 16.81
-- 41.48
-- 59.83
+# EFT training: one network separating the SM-inclusive points c0 (label 0) and c1 (label 1); keys are described in
+# README.md, the data in docs/data.md
+
+# data: the nominal directory of a combined sample (holdout: its validation.p)
 method: eft
-name: /groups/klannon/cmcgrad2/results/reco_systematics/42_seed/nominal/ctj8/0.1
+data: /groups/klannon/cmcgrad2/data/reco_systematics_v3/SR_CHANNELS_2j3j_gen/nominal
+lumi: [19.52, 16.81, 41.48, 59.83]  # fb^-1 per era
+eras: [2016APV, '2016', '2017', '2018']  # era names for the plots, indexed like lumi
+zero_terms: /groups/klannon/cmcgrad2/data/reco_systematics_v3/zero_terms.yml
+
+# training point: c0 = SM, c1 = ctj8 at 0.1 (first entry 1, then one value per WC in wcs order)
+wcs: [cQd1, ctj1, cQj31, ctj8, ctd1, ctd8, ctGRe, ctGIm, cQj11, cQj18, ctu8, cQd8, ctu1, cQu1, cQj38, cQu8]
+c0: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+c1: [1.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# network: probability output (Sigmoid)
 network:
-- activation: LeakyReLU
-  out: 128
-  type: Linear
-- activation: LeakyReLU
-  in: 128
-  out: 128
-  type: Linear
-- activation: Sigmoid
-  in: 128
-  out: 1
-  type: Linear
-patience: 10
+  - {type: Linear, out: 128, activation: LeakyReLU}
+  - {type: Linear, in: 128, out: 128, activation: LeakyReLU}
+  - {type: Linear, in: 128, out: 1, activation: Sigmoid}
+
+# optimisation
 seed: 42
-wcs:
-- cQd1
-- ctj1
-- cQj31
-- ctj8
-- ctd1
-- ctd8
-- ctGRe
-- ctGIm
-- cQj11
-- cQj18
-- ctu8
-- cQd8
-- ctu1
-- cQu1
-- cQj38
-- cQu8
+batchSize: 10000
+learningRate: 0.005
+scheduler: plateau
+factor: 0.1
+patience: 10
+epochs: 1000
+device: cpu
+threads: 1
+
+# plots
+features: /groups/klannon/cmcgrad2/data/reco_systematics_v3/features.yml
+features_to_animate: [dldbjmass, dlmass, dlpt]
+animate_per_epoch: 5
+
+# output
+name: /groups/klannon/cmcgrad2/results/examples/eft_ctj8_0.1

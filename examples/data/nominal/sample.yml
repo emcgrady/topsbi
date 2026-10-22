@@ -1,0 +1,7 @@
+# presence marks <root>/nominal as combined data (eft trainings then use the event-key split)
+# checked against every variation's sample.yml: must be equal
+reference: gen     # the point of w_ref (here the generation point)
+salt_split: 0      # salt of the train / validation split hash
+# any other keys are free, e.g. what the combiner records:
+variation: nominal
+columns: [features, coefs, ids, event_id, syst_ratio, w_ref]
