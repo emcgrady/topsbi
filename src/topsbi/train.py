@@ -23,8 +23,6 @@ from threadpoolctl import threadpool_limits
 
 # config keys every nuisance training needs
 NUISANCE_KEYS = ('data', 'systematic', 'direction', 'lumi', 'seed')
-# era names indexed like lumi (config 'eras')
-DEFAULT_ERAS = ['2016APV', '2016', '2017', '2018']
 
 
 def check_config(config):
@@ -60,15 +58,18 @@ def closure_options(config):
 
     Default groups: the era, and njets (column 19) with values >= 4 merged.
     Args:
-        config: training config (optional 'year_loc', default 21; 'eras', default DEFAULT_ERAS; 'closure_groups', a
-            list of {loc, optional label, optional cap})
+        config: training config ('lumi'; optional 'year_loc', default 21; 'eras', era names indexed like lumi,
+            without it the eras are labelled by their index; 'closure_groups', a list of {loc, optional label,
+            optional cap})
     Returns:
         dict: 'year_loc'; 'group_cols' (tuple) and 'group_caps' ({loc: cap}) for closure_metrics; 'group_labels'
         ({loc: (label, {value: text})}) for group_pull_plot; 'value_names' ({loc: {value: text}}, the era names) for
         the per-feature tick labels (closure_plot)
     """
     year_loc = config.get('year_loc', 21)
-    value_names = {year_loc: dict(enumerate(config.get('eras', DEFAULT_ERAS)))}
+    # era names for the plots; without 'eras' the eras are labelled by their index (0, 1, ...)
+    names = config.get('eras') or [str(era) for era in range(len(config['lumi']))]
+    value_names = {year_loc: dict(enumerate(names))}
     groups = config.get('closure_groups', [{'loc': year_loc}, {'loc': 19, 'label': 'jets', 'cap': 4}])
     group_caps, group_labels = {}, {}
     for group in groups:

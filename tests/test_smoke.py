@@ -233,11 +233,17 @@ def test_eft_combined_training(train_config, nuisance_config, tmp_path):
 def test_closure_options():
     from topsbi.train import check_config, closure_options
 
-    default = closure_options({})
+    lumi = [19.52, 16.81, 41.48, 59.83]
+    default = closure_options({'lumi': lumi})
     assert default['group_cols'] == (21, 19) and default['group_caps'] == {19: 4}
     assert default['group_labels'][19] == ('jets', {4: '≥4'})
-    assert default['value_names'][21][0] == '2016APV' == default['group_labels'][21][1][0]
-    custom = closure_options({'year_loc': 5, 'eras': ['A', 'B'], 'closure_groups': [{'loc': 5}, {'loc': 7, 'cap': 2}]})
+    # without eras, the eras are labelled by their index
+    assert default['value_names'][21] == {0: '0', 1: '1', 2: '2', 3: '3'} == default['group_labels'][21][1]
+    named = closure_options({'lumi': lumi, 'eras': ['2016APV', '2016', '2017', '2018']})
+    assert named['value_names'][21][0] == '2016APV' == named['group_labels'][21][1][0]
+    custom = closure_options(
+        {'lumi': [1, 2], 'year_loc': 5, 'eras': ['A', 'B'], 'closure_groups': [{'loc': 5}, {'loc': 7, 'cap': 2}]}
+    )
     assert custom['group_cols'] == (5, 7) and custom['group_caps'] == {7: 2}
     assert custom['value_names'] == {5: {0: 'A', 1: 'B'}} and custom['group_labels'][7] == ('', {2: '≥2'})
     for bad in (
