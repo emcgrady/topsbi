@@ -7,7 +7,7 @@ torch.set_num_threads(1)
 
 
 class NetworkRatio:
-    """One trained network as a function x -> r_hat(x; theta_1), theta_1 = its config['c1']."""
+    """One trained network as a function x -> r_hat(x; theta_1) (theta_1 = its config['c1']), or log r_hat with log_ratio."""
 
     def __init__(self, config, n_features, device='cpu'):
         """
@@ -44,6 +44,19 @@ class NetworkRatio:
         with torch.no_grad():
             r_hat = self.model.ratio(features.to(self.device))
         return r_hat.cpu()
+
+    def log_ratio(self, features: torch.tensor):
+        """
+        Learned log ratio of a series of events.
+
+        Args:
+            features: non-normalized features x to be evaluated by the network
+        Returns:
+            f_hat: log r_hat(x; theta_1) per event (log r_hat(x; theta, nu) for a nuisance network), on the CPU
+        """
+        with torch.no_grad():
+            f_hat = self.model.log_ratio(features.to(self.device))
+        return f_hat.cpu()
 
 
 class RatioFit:
