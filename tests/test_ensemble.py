@@ -23,6 +23,7 @@ class FakeRatioFit:
         self.finite, self.Gamma = SEEDS[config['sm']]
         self.mask = self.masks.get(config['sm'], MASK)
         self.residuals = torch.rand(int(self.finite.sum()))
+        self.rank = int(self.mask.sum())  # full column rank, as lstsq reports for a well-posed fit
 
 
 @pytest.fixture
@@ -56,6 +57,7 @@ def test_ensemble_averages_aligned_events(ensemble_config):
 
     wcs = [1.0, 2.0, 3.0]
     assert torch.allclose(ens(wcs), get_lower_tri(wcs)[MASK] @ expected)
+    assert ens.rank == {seed: int(MASK.sum()) for seed in SEEDS}
 
 
 def test_ensemble_passes_each_seed_fit_to_per_seed(ensemble_config):

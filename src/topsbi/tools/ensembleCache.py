@@ -147,33 +147,37 @@ def component_labels(wcs, mask):
 
 
 class SeedCollector:
-    def __init__(self, seeds):
+    def __init__(self, seeds, path):
         """
-        Keep each seed's fit while Ensemble discards it: per-event Gamma, kept events and fit residuals (layer 1 of
-        the ensemble cache), and Theta, the network names and R, every network's per-event ratio (layer 2).
+        Write each seed's fit while Ensemble discards it, so only one seed's R is in memory: per-event Gamma, kept
+        events and fit residuals (layer 1 of the ensemble cache), and Theta, the network names and R, every network's
+        per-event ratio (layer 2), to {path}.tmp/seed_{seed}. write_cache completes the cache.
         Pass an instance as Ensemble(..., per_seed=collector).
 
         Args:
             seeds: config['seeds'], for the network names
+            path: cache directory (written to path.tmp until write_cache moves it into place)
         """
         self.seeds = seeds
-        self.layer = {}
+        self.tmp = f'{path}.tmp'
+        shutil.rmtree(self.tmp, ignore_errors=True)
+        os.makedirs(self.tmp)
 
     def __call__(self, seed, fit):
         paths = self.seeds[seed]['networks'] + [self.seeds[seed]['sm']]
         base = os.path.commonpath([os.path.dirname(p) for p in paths])
-        self.layer[seed] = {
-            'networks': [os.path.relpath(os.path.dirname(p), base) for p in paths],
-            # keys are the cache file names (written by write_cache)
-            'Theta': fit.Theta.numpy(),
-            'rank': int(fit.rank),
-            'filter': fit.finite.numpy(),
-            'gammas': fit.Gamma.numpy(),
-            # R: every network's ratio for every event (inf where a network diverged; filter marks the usable events)
-            'ratios': fit.R.numpy(),
-            # empty unless Theta has more rows than columns and full column rank
-            'residuals': fit.residuals.numpy() if fit.residuals.numel() else None,
-        }
+        d = f'{self.tmp}/seed_{seed}'
+        os.makedirs(d)
+        # file names are read by EnsembleCache
+        np.save(f'{d}/gammas.npy', fit.Gamma.numpy())
+        np.save(f'{d}/filter.npy', fit.finite.numpy())
+        # empty unless Theta has more rows than columns and full column rank
+        if fit.residuals.numel():
+            np.save(f'{d}/residuals.npy', fit.residuals.numpy())
+        # R: every network's ratio for every event (inf where a network diverged; filter marks the usable events)
+        np.save(f'{d}/ratios.npy', fit.R.numpy())
+        names = [os.path.relpath(os.path.dirname(p), base) for p in paths]
+        np.savez(f'{d}/network.npz', Theta=fit.Theta.numpy(), networks=np.array(names))
 
 
 def model_hashes(seeds):
@@ -189,35 +193,24 @@ def model_hashes(seeds):
     return hashes
 
 
-def write_cache(path, config, ensemble, layer):
+def write_cache(path, config, ensemble):
     """
-    Write an ensemble cache to path. Layer 1 (event level): mean Gamma (gamma_cache.npy), mask, events kept by every
-    seed (filter_cache.npy), and per seed Gamma (gammas.npy), kept events (filter.npy) and fit residuals. Layer 2
-    (network level): per seed Theta, the network names and R, every network's per-event ratio (ratios.npy). The cache
-    is built in path.tmp and moved into place, and ensemble.yml is written last, so an interrupted write never looks
-    complete.
+    Complete an ensemble cache and move it to path. SeedCollector has written every seed to path.tmp: Gamma
+    (gammas.npy), kept events (filter.npy) and fit residuals (layer 1), Theta, the network names and R, every
+    network's per-event ratio (ratios.npy, layer 2). This adds the mean Gamma (gamma_cache.npy), the mask and the
+    events kept by every seed (filter_cache.npy), then ensemble.yml last, so an interrupted write never looks complete.
 
     Args:
         path: cache directory, replaced if it exists
         config: validation config (data, c0, wcs, seeds, lumi)
-        ensemble: the fitted Ensemble
-        layer: SeedCollector.layer
+        ensemble: the fitted Ensemble (its rank: the rank of every seed's Theta)
     """
     tmp = f'{path}.tmp'
-    shutil.rmtree(tmp, ignore_errors=True)
-    os.makedirs(tmp)
+    if not os.path.isdir(tmp):
+        raise FileNotFoundError(f'{tmp} not found: fit the ensemble with Ensemble(..., per_seed=SeedCollector(...))')
     np.save(f'{tmp}/gamma_cache.npy', ensemble.Gamma.numpy())
     np.save(f'{tmp}/mask_cache.npy', ensemble.mask.numpy())
     np.save(f'{tmp}/filter_cache.npy', ensemble.finite.numpy())
-    for seed, s in layer.items():
-        d = f'{tmp}/seed_{seed}'
-        os.makedirs(d)
-        np.save(f'{d}/gammas.npy', s['gammas'])
-        np.save(f'{d}/filter.npy', s['filter'])
-        if s['residuals'] is not None:
-            np.save(f'{d}/residuals.npy', s['residuals'])
-        np.save(f'{d}/ratios.npy', s['ratios'])
-        np.savez(f'{d}/network.npz', Theta=s['Theta'], networks=np.array(s['networks']))
     manifest = {
         'data': config['data'],
         'c0': config['c0'],
@@ -225,7 +218,7 @@ def write_cache(path, config, ensemble, layer):
         'lumi': config['lumi'],
         'seeds': config['seeds'],
         'model_hash': model_hashes(config['seeds']),
-        'rank': {seed: s['rank'] for seed, s in layer.items()},
+        'rank': ensemble.rank,
         'created': datetime.datetime.now().isoformat(timespec='seconds'),
     }
     with open(f'{tmp}/ensemble.yml', 'w') as f:
