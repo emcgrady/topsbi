@@ -116,8 +116,9 @@ def component_bias(sums, binning):
 
     For each component q and feature f, the bias Delta_q,b (D in code) = <hat w_q,b - w_q,b>_e per bin K_b, with noise
     Var_MC (MC statistics) and Var_seeds (variance of the ensemble mean). chi2 = sum Delta^2 / Var_MC has expectation
-    sum (1 + Var_seeds / Var_MC) and variance 2 sum (1 + Var_seeds / Var_MC)^2 without bias, so Z ~ N(0, 1) for an
-    unbiased component.
+    sum (1 + Var_seeds / Var_MC) and variance 2 sum (1 + Var_seeds / Var_MC)^2 without bias. Z is the excess chi2 in units
+    of its noise standard deviation: a screening statistic (mean 0, variance 1 without bias), not a Gaussian
+    significance, since the chi2 of ~20 bins is right-skewed and Z overstates large excesses.
 
     Args:
         sums: output of component_sums
@@ -125,9 +126,6 @@ def component_bias(sums, binning):
     Returns:
         dict with
             Z: [K, F] excess chi2 in standard deviations
-            Z_gauss: [K, F] Gaussian-equivalent significance: the noise-only chi2 approximated as a * chi2_nu with
-                matching mean and variance (a = var / (2 mean), nu = 2 mean^2 / var), its tail probability above the
-                observed chi2 converted to standard-normal sigma
             rms_bias: [K, F] sqrt(mean((Delta^2 - Var_MC - Var_seeds) / lambda_K_b(theta_SM)^2)), noise-subtracted rms
                 bias per bin as a fraction of the SM yield, per unit WC (or WC^2)
             D: [K, B] ensemble-mean bias Delta
@@ -139,7 +137,6 @@ def component_bias(sums, binning):
     s2 = bias.var(0, ddof=1) / n_seeds if n_seeds > 1 else np.zeros_like(D)
     n_features = len(binning['names'])
     Z, rms_bias = np.full((n_comp, n_features), np.nan), np.full((n_comp, n_features), np.nan)
-    Z_gauss = np.full((n_comp, n_features), np.nan)
     for f in range(n_features):
         b = (binning['feature'] == f) & (sm_yield > 0)
         e2, d2, v = mc_var[:, b], D[:, b] ** 2, s2[:, b]
@@ -152,12 +149,8 @@ def component_bias(sums, binning):
         variance = 2 * (ok * (1 + ratio) ** 2).sum(1)
         with np.errstate(invalid='ignore', divide='ignore'):
             Z[:, f] = (chi2 - expected) / np.sqrt(variance)
-            # P(a chi2_nu > chi2) is the regularized upper incomplete gamma Q(nu / 2, chi2 / (2 a))
-            scale, dof = variance / (2 * expected), 2 * expected**2 / variance
-            p = torch.special.gammaincc(torch.as_tensor(dof / 2), torch.as_tensor(chi2 / scale / 2))
-            Z_gauss[:, f] = (-torch.special.ndtri(p)).numpy()
         rms_bias[:, f] = np.sqrt(np.maximum(np.mean((d2 - e2 - v) / sm_yield[b] ** 2, axis=1), 0))
-    return {'Z': Z, 'Z_gauss': Z_gauss, 'rms_bias': rms_bias, 'D': D, 's2': s2}
+    return {'Z': Z, 'rms_bias': rms_bias, 'D': D, 's2': s2}
 
 
 def _network_sums_seed(seed, path, binning, w0, weights, chunk):
@@ -689,8 +682,6 @@ def write_results(
             'worst_feature': features[int(np.nanargmax(bias['Z'][k]))],
             'rms_bias': float(np.nanmax(bias['rms_bias'][k])),
             'Z': {f: float(z) for f, z in zip(features, bias['Z'][k])},
-            'max_Z_gauss': float(np.nanmax(bias['Z_gauss'][k])),
-            'Z_gauss': {f: float(z) for f, z in zip(features, bias['Z_gauss'][k])},
             'constrained': bool(np.isfinite(sigma0[k])),
             'sigma_propagated': None if np.isnan(sigma0[k]) else float(sigma0[k]),
             'sigma_after_search': None if np.isnan(sigma1[k]) else float(sigma1[k]),
@@ -816,7 +807,6 @@ def main(config_path, refit=False):
         f'{name}/plots/z_heatmap_full.png',
         z_flag,
         feature_config=config['features'],
-        Z_gauss=bias['Z_gauss'],
     )
     compact = [int(k) for k in np.argsort(-max_z)[: len(flagged) + 10]]
     plot_z_heatmap(
@@ -828,7 +818,6 @@ def main(config_path, refit=False):
         z_flag,
         components=compact,
         feature_config=config['features'],
-        Z_gauss=bias['Z_gauss'],
     )
 
     # closure of every component in its worst feature, flagged and passed components in separate directories

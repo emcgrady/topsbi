@@ -1099,7 +1099,7 @@ def _no_tex_mapping(record):
 
 
 def plot_z_heatmap(
-    Z, labels, kinds, features, outname, z_threshold=5.0, z_max=15.0, components=None, feature_config=None, Z_gauss=None
+    Z, labels, kinds, features, outname, z_threshold=5.0, z_max=15.0, components=None, feature_config=None
 ):
     '''
     Significance of the bias of gamma components in every network input. Columns are components, grouped by kind and
@@ -1117,8 +1117,6 @@ def plot_z_heatmap(
         components: indices of the components to show, default all
         feature_config: contents of the features yml; if given, features are labelled with their TeX label (as on
             the x axis of the training's kinematic plots, without the unit) instead of by name
-        Z_gauss: [K, F] Gaussian-equivalent significance; cells with Z_gauss > z_threshold (a genuine 5 sigma) get a
-            second, inner outline
     '''
     kinds = np.array(kinds)
     components = np.arange(len(labels)) if components is None else np.asarray(components)
@@ -1134,11 +1132,6 @@ def plot_z_heatmap(
     image = ax.imshow(np.clip(shown, 0, z_max), cmap=cmap, vmin=0, vmax=z_max, aspect='equal', interpolation='none')
     for row, col in zip(*np.nonzero(shown > z_threshold)):
         ax.add_patch(Rectangle((col - 0.5, row - 0.5), 1, 1, fill=False, edgecolor='#e34948', linewidth=1.5))
-    if Z_gauss is not None:
-        # a second outline inside the first where the flag is also a genuine 5 sigma
-        strong = Z_gauss[np.ix_(columns, rows)].T > z_threshold
-        for row, col in zip(*np.nonzero(strong)):
-            ax.add_patch(Rectangle((col - 0.3, row - 0.3), 0.6, 0.6, fill=False, edgecolor='#e34948', linewidth=1.5))
     # separators between the kinds
     present = [kind for kind in KIND_ORDER if (kinds[columns] == kind).any()]
     edges = np.cumsum([(kinds[columns] == kind).sum() for kind in present])
