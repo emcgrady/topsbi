@@ -1,13 +1,58 @@
-data: /groups/klannon/cmcgrad2/data/new_sample/test.p
-features: /groups/klannon/cmcgrad2/data/new_sample/features.yml
-networks:
-- /groups/klannon/cmcgrad2/results/seed_collection/0_seed/sm/sm_quad/training.yml
-- /groups/klannon/cmcgrad2/results/seed_collection/0_seed/ctGRe/ctGRe_-0.15/training.yml
-- /groups/klannon/cmcgrad2/results/seed_collection/0_seed/ctGRe/ctGRe_-0.03/training.yml
-- /groups/klannon/cmcgrad2/results/seed_collection/0_seed/ctGRe/ctGRe_-0.05/training.yml
-- /groups/klannon/cmcgrad2/results/seed_collection/0_seed/ctGRe/ctGRe_-0.01/training.yml
-- /groups/klannon/cmcgrad2/results/seed_collection/0_seed/ctGRe/ctGRe_-0.5/training.yml
-- /groups/klannon/cmcgrad2/results/seed_collection/0_seed/ctGRe/ctGRe_0.01/training.yml
-- /groups/klannon/cmcgrad2/results/seed_collection/0_seed/ctGRe/ctGRe_0.05/training.yml
-- /groups/klannon/cmcgrad2/results/seed_collection/0_seed/ctGRe/ctGRe_0.1/training.yml
-- /groups/klannon/cmcgrad2/results/seed_collection/0_seed/ctGRe/ctGRe_-0.1/training.yml
+# Validation of an ensemble of EFT networks (python -m topsbi.validation -c config.yml [--refit]); keys are
+# described in README.md, the ensemble in docs/ensemble.md and the validation in docs/validation.md.
+#
+# The network lists below are shortened to show the format. A real config lists every network of every member, at
+# least as many as kept terms of T(theta), and every member at the same training points; such lists are best written
+# by a script from the results directory.
+
+# events the ensemble is evaluated and tested on (never used in training), with their structure constants
+data: /groups/klannon/cmcgrad2/data/reco_systematics_v3/SR_CHANNELS_2j3j_gen/nominal/validation.p
+features: /groups/klannon/cmcgrad2/data/reco_systematics_v3/features.yml
+lumi: [19.52, 16.81, 41.48, 59.83]  # fb^-1 per era, indexed by the era column
+year_loc: 21
+
+# reference point of every network and the WC order (as in the training configs)
+wcs: [cQd1, ctj1, cQj31, ctj8, ctd1, ctd8, ctGRe, ctGIm, cQj11, cQj18, ctu8, cQd8, ctu1, cQu1, cQj38, cQu8]
+c0: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# ensemble members: per member (seed) the training configs of its networks and of its SM network
+seeds:
+  0:
+    networks:
+      - /groups/klannon/cmcgrad2/results/reco_systematics/0_seed/nominal/ctj8/p_one/training.yml
+      - /groups/klannon/cmcgrad2/results/reco_systematics/0_seed/nominal/ctj8/n_one/training.yml
+      - /groups/klannon/cmcgrad2/results/reco_systematics/0_seed/nominal/ctGRe_ctj8/p_one_p_one/training.yml
+    sm: /groups/klannon/cmcgrad2/results/reco_systematics/0_seed/nominal/sm/training.yml
+  1:
+    networks:
+      - /groups/klannon/cmcgrad2/results/reco_systematics/1_seed/nominal/ctj8/p_one/training.yml
+      - /groups/klannon/cmcgrad2/results/reco_systematics/1_seed/nominal/ctj8/n_one/training.yml
+      - /groups/klannon/cmcgrad2/results/reco_systematics/1_seed/nominal/ctGRe_ctj8/p_one_p_one/training.yml
+    sm: /groups/klannon/cmcgrad2/results/reco_systematics/1_seed/nominal/sm/training.yml
+
+# resources: networks evaluated on the CPU; members processed one at a time (workers > 1: one process and one core
+# per member at once)
+device: cpu
+n_threads: 1
+workers: 1
+
+# bias test, suspects and drop tests, point search (the defaults, written out)
+bias:
+  n_bins: 20
+  min_neff: 30
+  z_threshold: 5.0
+suspects:
+  z_threshold: 5.0
+  share_threshold: 0.5
+  seed_fraction: 0.5
+  min_gain: 2.0
+  tolerance: 1.0
+point_search:
+  G: flagged
+  unflagged_weight: 0.1
+  n_units: 10
+  min_gain: 0.01
+n_top_networks: 5
+
+# output: ensemble cache, ensemble_diagnostics.yml, proposed_points.yml, plots/
+name: /groups/klannon/cmcgrad2/results/examples/validation

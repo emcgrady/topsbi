@@ -152,7 +152,7 @@ class SeedCollector:
         Write each seed's fit while Ensemble discards it, so only one seed's R is in memory: per-event Gamma, kept
         events and fit residuals (layer 1 of the ensemble cache), and Theta, the network names and R, every network's
         per-event ratio (layer 2), to {path}.tmp/seed_{seed}. write_cache completes the cache.
-        Pass an instance as Ensemble(..., per_seed=collector).
+        Pass an instance as Ensemble(..., per_seed=collector). The files are listed in docs/ensemble.md.
 
         Args:
             seeds: config['seeds'], for the network names
@@ -199,6 +199,7 @@ def write_cache(path, config, ensemble):
     (gammas.npy), kept events (filter.npy) and fit residuals (layer 1), Theta, the network names and R, every
     network's per-event ratio (ratios.npy, layer 2). This adds the mean Gamma (gamma_cache.npy), the mask and the
     events kept by every seed (filter_cache.npy), then ensemble.yml last, so an interrupted write never looks complete.
+    Every file and key is listed in docs/ensemble.md.
 
     Args:
         path: cache directory, replaced if it exists

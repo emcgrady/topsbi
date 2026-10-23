@@ -669,7 +669,8 @@ def write_results(
 ):
     """
     Write ensemble_diagnostics.yml (fit health, bias test, attribution, suspects, point search) and
-    proposed_points.yml (the points of the units chosen by the search) to name.
+    proposed_points.yml (the points of the units chosen by the search) to name. Every key is listed in
+    docs/validation.md.
     """
     n_top = config.get('n_top_networks', 5)
     features = binning['names']
