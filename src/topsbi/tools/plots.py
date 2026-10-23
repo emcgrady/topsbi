@@ -689,20 +689,24 @@ def bin_tick_labels(edges, params=None, value_names=None):
     return positions, labels
 
 
-def place_legend_and_metrics(ax, samples, rows, fontsize=17, gap=10):
+def place_legend(ax, samples, rows, fontsize=17, beside=True, gap=10):
     """
-    Legend with the metrics to its right, the metrics aligned on their '=' signs and top-aligned with the legend
-    (bottom-aligned for a lower placement). The pair is placed as one block at the upper corners, the top centre and
-    the lower corners in turn, and the placement covering the fewest data samples is kept; placements whose metrics
-    would leave the axes are skipped (all of them only if none fits). The axis ranges are not changed.
+    Legend with rows of text, each drawn as 'label = value' and aligned on its '=' sign, placed where legend and rows
+    together cover the fewest data samples. With beside, the rows sit to the right of the legend, top-aligned with it
+    (bottom-aligned for a lower placement), and the legend moves left by their width so the pair stays inside the
+    axes; otherwise they are stacked under the legend on its side (right, left or centred), and a lower legend is
+    lifted by their height. The upper corners, the top centre, the lower corners and the bottom centre are tried in
+    turn; placements whose rows would leave the axes are skipped (all of them only if none fits); ties go to the
+    earlier placement. The axis ranges are not changed.
 
     Args:
         ax: axes holding the labelled artists
-        samples: [N, 2] points in data coordinates that the block should avoid (lines and error bars, densely
-            sampled); non-finite points are ignored
-        rows: (label, value) pairs of the metrics, drawn as 'label = value'
-        fontsize: font size of the legend entries and the metrics
-        gap: space between the legend and the metrics, in pixels
+        samples: [N, 2] points in data coordinates to avoid (lines and error bars, densely sampled); non-finite
+            points are ignored
+        rows: (label, value) pairs, e.g. [(r'$Z$', '3.1')]
+        fontsize: font size of the legend entries and the rows
+        beside: rows to the right of the legend (True) or under it (False)
+        gap: space between the legend and the rows, in pixels
     Returns:
         the legend
     """
@@ -723,27 +727,36 @@ def place_legend_and_metrics(ax, samples, rows, fontsize=17, gap=10):
     value_w = max(size(f' = {value}')[0] for _, value in rows)
     row_h = max(size(f'{label} = {value}')[1] for label, value in rows) * 1.15
     block_w, block_h = label_w + value_w, row_h * len(rows)
-    shift = (block_w + gap) / axes_box.width  # axes fraction taken by the metrics and the gap
 
     def layout(loc):
         vertical, horizontal = loc.split()
-        anchor_y = 1 if vertical == 'upper' else 0
-        # the legend moves left by the metrics' width wherever the pair would otherwise leave the axes
-        anchor_x = {'left': 0, 'center': 0.5 - shift / 2, 'right': 1 - shift}[horizontal]
-        legend = ax.legend(fontsize=fontsize, loc=loc, bbox_to_anchor=(anchor_x, anchor_y), bbox_transform=ax.transAxes)
+        if beside:
+            # the legend moves left by the rows' width wherever the pair would otherwise leave the axes
+            shift = (block_w + gap) / axes_box.width
+            anchor_x = {'left': 0, 'center': 0.5 - shift / 2, 'right': 1 - shift}[horizontal]
+            anchor = (anchor_x, 1 if vertical == 'upper' else 0)
+        else:
+            # a lower legend is lifted so the rows fit under it
+            lift = (block_h + gap) / axes_box.height
+            anchor = (0, lift, 1, 1 - lift) if vertical == 'lower' else (0, 0, 1, 1)
+        legend = ax.legend(fontsize=fontsize, loc=loc, bbox_to_anchor=anchor, bbox_transform=ax.transAxes)
         box = legend.get_window_extent(renderer)
-        x0 = box.x1 + gap
-        y1 = box.y1 if vertical == 'upper' else box.y0 + block_h
+        if beside:
+            x0 = box.x1 + gap
+            y1 = box.y1 if vertical == 'upper' else box.y0 + block_h
+        else:
+            x0 = {'left': box.x0, 'center': (box.x0 + box.x1 - block_w) / 2, 'right': box.x1 - block_w}[horizontal]
+            y1 = box.y0 - gap / 2
         return legend, box, (x0, y1 - block_h, x0 + block_w, y1)
 
     def covered(x0, y0, x1, y1):
         return int(((points[:, 0] >= x0) & (points[:, 0] <= x1) & (points[:, 1] >= y0) & (points[:, 1] <= y1)).sum())
 
     scores, fits = {}, {}
-    for loc in ['upper right', 'upper left', 'upper center', 'lower right', 'lower left']:
+    for loc in ['upper right', 'upper left', 'upper center', 'lower right', 'lower left', 'lower center']:
         legend, box, block = layout(loc)
         legend.remove()
-        fits[loc] = block[2] <= axes_box.x1
+        fits[loc] = axes_box.x0 <= block[0] and block[2] <= axes_box.x1 and axes_box.y0 <= block[1]
         scores[loc] = covered(box.x0, box.y0, box.x1, box.y1) + covered(*block)
     candidates = [loc for loc in scores if fits[loc]] or list(scores)
     legend, _, (x0, y0, x1, y1) = layout(min(candidates, key=scores.get))
@@ -887,7 +900,7 @@ def closure_plot(closure, params, outname, hypothesis, lumi=None, epoch=None, yl
             (r'$\Delta_{\mathrm{rms}}$', f'{100 * summary["rms_bias"]:.2f}%'),
             (r'$Z$', f'{summary["z"]:.1f}'),
         ]
-        place_legend_and_metrics(top, np.concatenate(sampled), rows)
+        place_legend(top, np.concatenate(sampled), rows)
         fig.savefig(outname, bbox_inches='tight')
     finally:
         mathtext_log.removeFilter(_no_tex_mapping)
@@ -1086,7 +1099,7 @@ def _no_tex_mapping(record):
 
 
 def plot_z_heatmap(
-    Z, labels, kinds, features, outname, z_threshold=5.0, z_max=15.0, components=None, feature_config=None, Z_gauss=None
+    Z, labels, kinds, features, outname, z_threshold=5.0, z_max=15.0, components=None, feature_config=None
 ):
     '''
     Significance of the bias of gamma components in every network input. Columns are components, grouped by kind and
@@ -1104,8 +1117,6 @@ def plot_z_heatmap(
         components: indices of the components to show, default all
         feature_config: contents of the features yml; if given, features are labelled with their TeX label (as on
             the x axis of the training's kinematic plots, without the unit) instead of by name
-        Z_gauss: [K, F] Gaussian-equivalent significance; cells with Z_gauss > z_threshold (a genuine 5 sigma) get a
-            second, inner outline
     '''
     kinds = np.array(kinds)
     components = np.arange(len(labels)) if components is None else np.asarray(components)
@@ -1121,11 +1132,6 @@ def plot_z_heatmap(
     image = ax.imshow(np.clip(shown, 0, z_max), cmap=cmap, vmin=0, vmax=z_max, aspect='equal', interpolation='none')
     for row, col in zip(*np.nonzero(shown > z_threshold)):
         ax.add_patch(Rectangle((col - 0.5, row - 0.5), 1, 1, fill=False, edgecolor='#e34948', linewidth=1.5))
-    if Z_gauss is not None:
-        # a second outline inside the first where the flag is also a genuine 5 sigma
-        strong = Z_gauss[np.ix_(columns, rows)].T > z_threshold
-        for row, col in zip(*np.nonzero(strong)):
-            ax.add_patch(Rectangle((col - 0.3, row - 0.3), 0.6, 0.6, fill=False, edgecolor='#e34948', linewidth=1.5))
     # separators between the kinds
     present = [kind for kind in KIND_ORDER if (kinds[columns] == kind).any()]
     edges = np.cumsum([(kinds[columns] == kind).sum() for kind in present])
@@ -1170,56 +1176,6 @@ def plot_z_heatmap(
     finally:
         mathtext_log.removeFilter(_no_tex_mapping)
     plt.close(fig)
-
-
-def _place_legend(ax, samples, note, fontsize=20):
-    '''
-    Put the legend, with a note line under it, where the two cover the fewest data samples. The corners and the top and
-    bottom centres of the axes are tried in turn; the axis ranges are not changed. For a bottom placement the legend is
-    lifted by the height of the note, so the note still sits under it.
-
-    Args:
-        ax: axes holding the labelled artists
-        samples: [N, 2] points in data coordinates that the legend should avoid (lines and error bars, densely sampled)
-        note: text of the line under the legend
-        fontsize: font size of the legend entries and the note
-    Returns:
-        the legend and the note text
-    '''
-    fig = ax.figure
-    fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
-    points = ax.transData.transform(samples)
-    to_axes = ax.transAxes.inverted()
-    probe = ax.text(0, 0, note, transform=ax.transAxes, fontsize=fontsize)
-    lift = (probe.get_window_extent(renderer).height + 4) / ax.get_window_extent(renderer).height
-    probe.remove()
-
-    def place(loc):
-        anchor = (0, lift, 1, 1 - lift) if loc.startswith('lower') else (0, 0, 1, 1)
-        legend = ax.legend(fontsize=fontsize, loc=loc, bbox_to_anchor=anchor, bbox_transform=ax.transAxes)
-        box = legend.get_window_extent(renderer)
-        (x0, y0), (x1, _) = to_axes.transform([(box.x0, box.y0), (box.x1, box.y1)])
-        side = 'right' if 'right' in loc else 'left' if 'left' in loc else 'center'
-        x = {'right': x1, 'left': x0, 'center': (x0 + x1) / 2}[side]
-        text = ax.text(x, y0, note, transform=ax.transAxes, ha=side, va='top', fontsize=fontsize)
-        return legend, text
-
-    scores = {}
-    for loc in ['upper right', 'upper left', 'upper center', 'lower right', 'lower left', 'lower center']:
-        legend, text = place(loc)
-        boxes = [legend.get_window_extent(renderer), text.get_window_extent(renderer)]
-        scores[loc] = sum(
-            int(
-                (
-                    (points[:, 0] >= b.x0) & (points[:, 0] <= b.x1) & (points[:, 1] >= b.y0) & (points[:, 1] <= b.y1)
-                ).sum()
-            )
-            for b in boxes
-        )
-        legend.remove()
-        text.remove()
-    return place(min(scores, key=scores.get))
 
 
 def plot_closure(k, f, sums, bias, binning, labels, outname, feature_config=None):
@@ -1328,8 +1284,8 @@ def plot_closure(k, f, sums, bias, binning, labels, outname, feature_config=None
             for vals, errs in ((truth, truth_err), (truth + D, learned_err))
             for c, v, e in zip(centers, vals, errs)
         ]
-        samples = np.concatenate(sampled)
-        _place_legend(top, samples[np.isfinite(samples).all(1)], rf'$Z_{{max}}$ = {np.nanmax(bias["Z"][k]):.1f}')
+        z_max = np.nanmax(bias['Z'][k])
+        place_legend(top, np.concatenate(sampled), [(r'$Z_{max}$', f'{z_max:.1f}')], fontsize=20, beside=False)
         fig.savefig(outname, bbox_inches='tight')
     finally:
         mathtext_log.removeFilter(_no_tex_mapping)

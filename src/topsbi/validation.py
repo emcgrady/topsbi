@@ -1,4 +1,4 @@
-from topsbi.tools.build_ratio import Ensemble
+from topsbi.tools.build_ratio import Ensemble, seed_map
 from topsbi.tools.data import get_lower_tri
 from topsbi.tools.ensembleCache import (
     EnsembleCache,
@@ -36,7 +36,8 @@ def load_ensemble(config, features, refit=False):
     model.pt), otherwise fitted and written, but only when refit is set.
 
     Args:
-        config: validation config (name, data, c0, wcs, seeds, features, lumi, optional device)
+        config: validation config (name, data, c0, wcs, seeds, features, lumi, optional device and workers, the seeds
+            fitted at once)
         features: [N, n_features] raw network inputs of config['data']
         refit: fit the ensemble and replace the cache even if one exists
     Returns:
@@ -51,9 +52,9 @@ def load_ensemble(config, features, refit=False):
             sys.exit(f'[error]: {path} was built from other data, c0, networks or model.pt files; rerun with --refit')
         return cache
     config.setdefault('device', 'cpu')
-    collector = SeedCollector(config['seeds'])
-    ensemble = Ensemble(config, features, per_seed=collector)
-    write_cache(path, config, ensemble, collector.layer)
+    collector = SeedCollector(config['seeds'], path)
+    ensemble = Ensemble(config, features, per_seed=collector, workers=config.get('workers', 1))
+    write_cache(path, config, ensemble)
     return EnsembleCache(path)
 
 
@@ -115,8 +116,9 @@ def component_bias(sums, binning):
 
     For each component q and feature f, the bias Delta_q,b (D in code) = <hat w_q,b - w_q,b>_e per bin K_b, with noise
     Var_MC (MC statistics) and Var_seeds (variance of the ensemble mean). chi2 = sum Delta^2 / Var_MC has expectation
-    sum (1 + Var_seeds / Var_MC) and variance 2 sum (1 + Var_seeds / Var_MC)^2 without bias, so Z ~ N(0, 1) for an
-    unbiased component.
+    sum (1 + Var_seeds / Var_MC) and variance 2 sum (1 + Var_seeds / Var_MC)^2 without bias. Z is the excess chi2 in units
+    of its noise standard deviation: a screening statistic (mean 0, variance 1 without bias), not a Gaussian
+    significance, since the chi2 of ~20 bins is right-skewed and Z overstates large excesses.
 
     Args:
         sums: output of component_sums
@@ -124,9 +126,6 @@ def component_bias(sums, binning):
     Returns:
         dict with
             Z: [K, F] excess chi2 in standard deviations
-            Z_gauss: [K, F] Gaussian-equivalent significance: the noise-only chi2 approximated as a * chi2_nu with
-                matching mean and variance (a = var / (2 mean), nu = 2 mean^2 / var), its tail probability above the
-                observed chi2 converted to standard-normal sigma
             rms_bias: [K, F] sqrt(mean((Delta^2 - Var_MC - Var_seeds) / lambda_K_b(theta_SM)^2)), noise-subtracted rms
                 bias per bin as a fraction of the SM yield, per unit WC (or WC^2)
             D: [K, B] ensemble-mean bias Delta
@@ -138,7 +137,6 @@ def component_bias(sums, binning):
     s2 = bias.var(0, ddof=1) / n_seeds if n_seeds > 1 else np.zeros_like(D)
     n_features = len(binning['names'])
     Z, rms_bias = np.full((n_comp, n_features), np.nan), np.full((n_comp, n_features), np.nan)
-    Z_gauss = np.full((n_comp, n_features), np.nan)
     for f in range(n_features):
         b = (binning['feature'] == f) & (sm_yield > 0)
         e2, d2, v = mc_var[:, b], D[:, b] ** 2, s2[:, b]
@@ -151,15 +149,34 @@ def component_bias(sums, binning):
         variance = 2 * (ok * (1 + ratio) ** 2).sum(1)
         with np.errstate(invalid='ignore', divide='ignore'):
             Z[:, f] = (chi2 - expected) / np.sqrt(variance)
-            # P(a chi2_nu > chi2) is the regularized upper incomplete gamma Q(nu / 2, chi2 / (2 a))
-            scale, dof = variance / (2 * expected), 2 * expected**2 / variance
-            p = torch.special.gammaincc(torch.as_tensor(dof / 2), torch.as_tensor(chi2 / scale / 2))
-            Z_gauss[:, f] = (-torch.special.ndtri(p)).numpy()
         rms_bias[:, f] = np.sqrt(np.maximum(np.mean((d2 - e2 - v) / sm_yield[b] ** 2, axis=1), 0))
-    return {'Z': Z, 'Z_gauss': Z_gauss, 'rms_bias': rms_bias, 'D': D, 's2': s2}
+    return {'Z': Z, 'rms_bias': rms_bias, 'D': D, 's2': s2}
 
 
-def network_sums(cache, binning, w0, weights, chunk=32):
+def _network_sums_seed(seed, path, binning, w0, weights, chunk):
+    """network_sums for one seed (through seed_map: the cache is opened here, so workers only memory-map it)."""
+    cache = EnsembleCache(path)
+    index, n_bins = binning['index'], binning['n_bins']
+    keep = torch.from_numpy(cache.seed_finite[seed])
+    network = cache.network(seed)
+    Theta = torch.from_numpy(network['Theta']).double()
+    R = cache.seed_R(seed)
+    w, w0k, idx = weights[keep], w0[keep], index[:, keep]
+    bias, mc_var = [], []
+    for start in range(0, len(Theta), chunk):
+        w0r = torch.from_numpy(np.asarray(R[start : start + chunk])[:, keep.numpy()]).double() * w0k
+        diff = w0r - (w @ Theta[start : start + chunk].T).T  # learned - true w0 * r per network
+        bias.append(binned_sums(diff, idx, n_bins))
+        mc_var.append(binned_sums(diff**2, idx, n_bins))
+    return {
+        'networks': list(network['networks']),
+        'Theta': network['Theta'],
+        'bias': np.concatenate(bias),
+        'mc_var': np.concatenate(mc_var),
+    }
+
+
+def network_sums(cache, binning, w0, weights, chunk=32, workers=1):
     """
     Binned misclosure of every training network of every seed, in the binning of the bias test.
 
@@ -169,6 +186,7 @@ def network_sums(cache, binning, w0, weights, chunk=32):
         w0: [N] w^s(theta_0) per event
         weights: [N, K] true per-event contribution of each kept component, L s_q(z) x 1000 (coefs[:, cache.mask])
         chunk: networks binned at a time (memory)
+        workers: seeds processed at once, one process each (seed_map)
     Returns:
         {seed: dict with
             networks: network names (rows of Theta)
@@ -180,27 +198,7 @@ def network_sums(cache, binning, w0, weights, chunk=32):
     """
     w0 = torch.as_tensor(w0, dtype=torch.float64)
     weights = torch.as_tensor(weights, dtype=torch.float64)
-    index, n_bins = binning['index'], binning['n_bins']
-    out = {}
-    for seed in cache.seeds:
-        keep = torch.from_numpy(cache.seed_finite[seed])
-        network = cache.network(seed)
-        Theta = torch.from_numpy(network['Theta']).double()
-        R = cache.seed_R(seed)
-        w, w0k, idx = weights[keep], w0[keep], index[:, keep]
-        bias, mc_var = [], []
-        for start in range(0, len(Theta), chunk):
-            w0r = torch.from_numpy(np.asarray(R[start : start + chunk])[:, keep.numpy()]).double() * w0k
-            diff = w0r - (w @ Theta[start : start + chunk].T).T  # learned - true w0 * r per network
-            bias.append(binned_sums(diff, idx, n_bins))
-            mc_var.append(binned_sums(diff**2, idx, n_bins))
-        out[seed] = {
-            'networks': list(network['networks']),
-            'Theta': network['Theta'],
-            'bias': np.concatenate(bias),
-            'mc_var': np.concatenate(mc_var),
-        }
-    return out
+    return seed_map(_network_sums_seed, cache.seeds, (cache.path, binning, w0, weights, chunk), workers)
 
 
 def attribute(networks, components, sm_yield):
@@ -276,26 +274,35 @@ def suspects(shares, z, networks, z_threshold=5.0, share_threshold=0.5, seed_fra
     return drop, retrain
 
 
-def refit_without(cache, drop):
+def _refit_seed(seed, path, drop):
+    """refit_without for one seed (through seed_map): Gamma, kept events and rank of Theta without the drops."""
+    cache = EnsembleCache(path)
+    network = cache.network(seed)
+    rows = np.array([name not in drop for name in network['networks']])
+    Theta = torch.from_numpy(network['Theta'][rows])
+    R = torch.from_numpy(np.asarray(cache.seed_R(seed))[rows])
+    keep = ~torch.isinf(R).any(0)
+    Gamma, _, rank, _ = torch.linalg.lstsq(Theta, R[:, keep], driver='gelsd')
+    # lstsq returns the solution in an [n_networks, N_finite] buffer; keep only Gamma's rows
+    return Gamma[: Theta.shape[1]].clone().numpy(), keep.numpy(), int(rank)
+
+
+def refit_without(cache, drop, workers=1):
     """
     Refit every seed's Gamma without the dropped training points: Theta Gamma = R in least squares on the stored R.
 
     Args:
         cache: EnsembleCache
         drop: names of the networks to remove from every seed (not the SM anchor)
+        workers: seeds refitted at once, one process each (seed_map)
     Returns:
         an object with the EnsembleCache attributes component_sums reads (seeds, seed_Gamma, seed_finite, Gamma,
         finite), plus rank: {seed: rank of the reduced Theta}
     """
-    seed_Gamma, seed_finite, rank = {}, {}, {}
-    for seed in cache.seeds:
-        network = cache.network(seed)
-        rows = np.array([name not in drop for name in network['networks']])
-        Theta = torch.from_numpy(network['Theta'][rows])
-        R = torch.from_numpy(np.asarray(cache.seed_R(seed))[rows])
-        keep = ~torch.isinf(R).any(0)
-        Gamma, _, rank[seed], _ = torch.linalg.lstsq(Theta, R[:, keep], driver='gelsd')
-        seed_Gamma[seed], seed_finite[seed] = Gamma.numpy(), keep.numpy()
+    fits = seed_map(_refit_seed, cache.seeds, (cache.path, drop), workers)
+    seed_Gamma = {s: f[0] for s, f in fits.items()}
+    seed_finite = {s: f[1] for s, f in fits.items()}
+    rank = {s: f[2] for s, f in fits.items()}
     common = np.logical_and.reduce(list(seed_finite.values()))
     mean = sum(g[:, common[f]] for g, f in zip(seed_Gamma.values(), seed_finite.values())) / len(seed_Gamma)
     return types.SimpleNamespace(
@@ -309,7 +316,43 @@ def refit_without(cache, drop):
     )
 
 
-def drop_bias_sums(cache, groups, binning, w0, weights, sums):
+def _drop_bias_seed(seed, path, groups, binning, w0, weights, chunk):
+    """
+    drop_bias_sums for one seed (through seed_map): {group: binned bias of the seed with the group removed, or None if
+    removing it leaves this seed's Theta rank-deficient}.
+    """
+    cache = EnsembleCache(path)
+    index, n_bins = binning['index'], binning['n_bins']
+    network = cache.network(seed)
+    names, Theta = network['networks'], network['Theta'].astype(np.float64)
+    keep = cache.seed_finite[seed]
+    R = cache.seed_R(seed)
+    H = Theta.T @ Theta
+    # groups whose removal leaves Theta full rank: (their rows of Theta, H - Theta_J^T Theta_J)
+    reduced, out = {}, {}
+    for g, members in groups.items():
+        rows = [names.index(n) for n in members]
+        Hg = H - Theta[rows].T @ Theta[rows]
+        if np.linalg.matrix_rank(Hg) < len(Hg):
+            out[g] = None
+            continue
+        reduced[g] = (rows, Hg)
+    keep_t = torch.from_numpy(keep)
+    truth = binned_sums(weights[keep_t].T, index[:, keep_t], n_bins)
+    seed_bias = {g: -truth for g in reduced}
+    # a step of events at a time: Gamma is per event and binned sums add over events
+    for start in range(0, len(keep), chunk):
+        kept = np.flatnonzero(keep[start : start + chunk])
+        Rc = np.asarray(R[:, start : start + chunk])[:, kept].astype(np.float64)
+        kept = torch.from_numpy(start + kept)
+        b = Theta.T @ Rc
+        for g, (rows, Hg) in reduced.items():
+            Gamma = torch.from_numpy(np.linalg.solve(Hg, b - Theta[rows].T @ Rc[rows]))
+            seed_bias[g] += binned_sums(Gamma * w0[kept], index[:, kept], n_bins)
+    return out | seed_bias
+
+
+def drop_bias_sums(cache, groups, binning, w0, weights, sums, chunk=50_000, workers=1):
     """
     Binned bias of the components gamma_q with each group of training points removed, every group from one pass over
     each seed's R. Dropping rows J of Theta gives Gamma_-J = (H - Theta_J^T Theta_J)^-1 (Theta^T R - Theta_J^T R_J),
@@ -322,30 +365,19 @@ def drop_bias_sums(cache, groups, binning, w0, weights, sums):
         groups: {group name: [network names removed together]}
         binning, w0, weights: as for component_sums
         sums: component_sums of the full ensemble (for mc_var, truth, sm_yield)
+        chunk: events per step (memory: one step holds R for chunk events in float64)
+        workers: seeds processed at once, one process each (seed_map)
     Returns:
         {group name: sums dict for component_bias, or None if removing the group leaves Theta rank-deficient}
     """
     w0 = torch.as_tensor(w0, dtype=torch.float64)
     weights = torch.as_tensor(weights, dtype=torch.float64)
-    index, n_bins = binning['index'], binning['n_bins']
-    bias = {g: [] for g in groups}
-    for seed in cache.seeds:
-        network = cache.network(seed)
-        names, Theta = network['networks'], network['Theta'].astype(np.float64)
-        keep = torch.from_numpy(cache.seed_finite[seed])
-        R = np.asarray(cache.seed_R(seed))[:, keep.numpy()].astype(np.float64)
-        H, b = Theta.T @ Theta, Theta.T @ R
-        truth = binned_sums(weights[keep].T, index[:, keep], n_bins)
-        for g, members in groups.items():
-            if bias[g] is None:
-                continue
-            rows = [names.index(n) for n in members]
-            Hg = H - Theta[rows].T @ Theta[rows]
-            if np.linalg.matrix_rank(Hg) < len(Hg):
-                bias[g] = None
-                continue
-            Gamma = torch.from_numpy(np.linalg.solve(Hg, b - Theta[rows].T @ R[rows]))
-            bias[g].append(binned_sums(Gamma * w0[keep], index[:, keep], n_bins) - truth)
+    per_seed = seed_map(_drop_bias_seed, cache.seeds, (cache.path, groups, binning, w0, weights, chunk), workers)
+    # a group that leaves any seed's Theta rank-deficient has no complete average
+    bias = {
+        g: None if any(per_seed[s][g] is None for s in cache.seeds) else [per_seed[s][g] for s in cache.seeds]
+        for g in groups
+    }
     return {
         g: None
         if b is None
@@ -637,7 +669,8 @@ def write_results(
 ):
     """
     Write ensemble_diagnostics.yml (fit health, bias test, attribution, suspects, point search) and
-    proposed_points.yml (the points of the units chosen by the search) to name.
+    proposed_points.yml (the points of the units chosen by the search) to name. Every key is listed in
+    docs/validation.md.
     """
     n_top = config.get('n_top_networks', 5)
     features = binning['names']
@@ -650,8 +683,6 @@ def write_results(
             'worst_feature': features[int(np.nanargmax(bias['Z'][k]))],
             'rms_bias': float(np.nanmax(bias['rms_bias'][k])),
             'Z': {f: float(z) for f, z in zip(features, bias['Z'][k])},
-            'max_Z_gauss': float(np.nanmax(bias['Z_gauss'][k])),
-            'Z_gauss': {f: float(z) for f, z in zip(features, bias['Z_gauss'][k])},
             'constrained': bool(np.isfinite(sigma0[k])),
             'sigma_propagated': None if np.isnan(sigma0[k]) else float(sigma0[k]),
             'sigma_after_search': None if np.isnan(sigma1[k]) else float(sigma1[k]),
@@ -732,6 +763,8 @@ def main(config_path, refit=False):
     with open(config_path) as f:
         config = yaml.safe_load(f)
     torch.set_num_threads(config.get('n_threads', 1))
+    # seeds processed at once by the per-seed stages (fit, network_sums, drop tests), one process each
+    workers = config.get('workers', 1)
     if isinstance(config['features'], str):
         with open(config['features']) as f:
             config['features'] = yaml.safe_load(f)
@@ -775,7 +808,6 @@ def main(config_path, refit=False):
         f'{name}/plots/z_heatmap_full.png',
         z_flag,
         feature_config=config['features'],
-        Z_gauss=bias['Z_gauss'],
     )
     compact = [int(k) for k in np.argsort(-max_z)[: len(flagged) + 10]]
     plot_z_heatmap(
@@ -787,7 +819,6 @@ def main(config_path, refit=False):
         z_flag,
         components=compact,
         feature_config=config['features'],
-        Z_gauss=bias['Z_gauss'],
     )
 
     # closure of every component in its worst feature, flagged and passed components in separate directories
@@ -810,7 +841,7 @@ def main(config_path, refit=False):
         )
 
     # attribution of the flagged biases to the training networks
-    networks = network_sums(cache, binning, w0, weights)
+    networks = network_sums(cache, binning, w0, weights, workers=workers)
     shares, total = attribute(networks, flagged, sums['sm_yield']) if flagged else ({}, None)
 
     # suspect networks, and the bias test refitted without the points to drop
@@ -839,13 +870,14 @@ def main(config_path, refit=False):
         }
         after = {
             g: None if s is None else component_bias(s, binning)
-            for g, s in drop_bias_sums(cache, groups, binning, w0, weights, sums).items()
+            for g, s in drop_bias_sums(cache, groups, binning, w0, weights, sums, workers=workers).items()
         }
         drop_tests = test_drops(bias, after, blamed, z_flag, cfg.get('min_gain', 2.0), cfg.get('tolerance', 1.0))
         drop = [n for g, members in groups.items() if drop_tests[g]['accepted'] for n in members]
         if drop:
             # drops that pass alone may interact: refit exactly without all of them and test the combination
-            refit_bias = component_bias(component_sums(refit_without(cache, drop), binning, w0, weights), binning)
+            refit = refit_without(cache, drop, workers=workers)
+            refit_bias = component_bias(component_sums(refit, binning, w0, weights), binning)
             accepted_blame = sorted({k for g in groups if drop_tests[g]['accepted'] for k in blamed[g]})
             combined = test_drops(
                 bias,
